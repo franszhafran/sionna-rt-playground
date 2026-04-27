@@ -1,10 +1,14 @@
 """
 Car Factory 3D Walkthrough Viewer
 
-Reads all PLY mesh files from car_factory_scene/meshes/, merges them into
-a single OBJ file, then serves an HTML page with Three.js first-person
-navigation (WASD + mouse look). gNBs and UEs from config.json are rendered
-as 3D markers inside the scene.
+Reads all PLY mesh files from car_factory_scene/meshes/, exports:
+  factory.obj      — walls, floors, partitions (no roofs)
+  factory_roof.obj — roof panels only (separately toggleable)
+
+Then serves an HTML page with Three.js first-person navigation (WASD + mouse look).
+gNBs and UEs from config.json are rendered as 3D markers. If sim_results.json
+exists, UE→best-gNB connection lines are rendered (toggleable). Roof is also
+independently toggleable.
 
 Usage:
     python factory_viewer.py          # serves on port 8889
@@ -14,17 +18,17 @@ Usage:
 import os, struct, json, argparse
 import http.server, socketserver, threading, webbrowser
 
-SCENE_DIR = "car_factory_scene"
-MESH_DIR  = os.path.join(SCENE_DIR, "meshes")
-OBJ_FILE  = os.path.join(SCENE_DIR, "factory.obj")
-HTML_FILE = os.path.join(SCENE_DIR, "index.html")
+SCENE_DIR      = "car_factory_scene"
+MESH_DIR       = os.path.join(SCENE_DIR, "meshes")
+OBJ_FILE       = os.path.join(SCENE_DIR, "factory.obj")
+OBJ_ROOF_FILE  = os.path.join(SCENE_DIR, "factory_roof.obj")
+HTML_FILE      = os.path.join(SCENE_DIR, "index.html")
 
 # ── PLY → OBJ exporter ────────────────────────────────────────────────────────
 
 def _read_ply(path):
     """Read a binary little-endian PLY (x,y,z,u,v + face list) → verts, faces."""
     with open(path, "rb") as f:
-        # parse header
         n_verts = n_faces = 0
         while True:
             line = b""
@@ -50,28 +54,42 @@ def _read_ply(path):
     return verts, faces
 
 
+def _is_roof(fname):
+    return fname.endswith("_roof.ply")
+
+
 def export_obj():
-    """Merge all PLY files into one OBJ file."""
-    all_verts, all_faces = [], []
-    offset = 0
+    """Merge all PLY files into two OBJ files: main geometry and roofs."""
+    main_verts, main_faces   = [], []
+    roof_verts, roof_faces   = [], []
+    main_offset = roof_offset = 0
+
     for fname in sorted(os.listdir(MESH_DIR)):
         if not fname.endswith(".ply"):
             continue
         verts, faces = _read_ply(os.path.join(MESH_DIR, fname))
-        all_verts.extend(verts)
-        for f in faces:
-            all_faces.append(tuple(i + offset + 1 for i in f))  # OBJ is 1-indexed
-        offset += len(verts)
+        if _is_roof(fname):
+            roof_verts.extend(verts)
+            for f in faces:
+                roof_faces.append(tuple(i + roof_offset + 1 for i in f))
+            roof_offset += len(verts)
+        else:
+            main_verts.extend(verts)
+            for f in faces:
+                main_faces.append(tuple(i + main_offset + 1 for i in f))
+            main_offset += len(verts)
 
-    with open(OBJ_FILE, "w") as f:
-        f.write("# Car Factory — merged geometry\n")
-        for x, y, z in all_verts:
-            f.write(f"v {x:.4f} {z:.4f} {y:.4f}\n")  # swap y↔z for Three.js (y-up)
-        for face in all_faces:
-            f.write("f " + " ".join(str(i) for i in face) + "\n")
+    def _write(path, verts, faces, label):
+        with open(path, "w") as f:
+            f.write(f"# Car Factory — {label}\n")
+            for x, y, z in verts:
+                f.write(f"v {x:.4f} {z:.4f} {y:.4f}\n")  # swap y↔z for Three.js y-up
+            for face in faces:
+                f.write("f " + " ".join(str(i) for i in face) + "\n")
+        print(f"Exported {len(verts):,} vertices, {len(faces):,} faces → {path}")
 
-    print(f"Exported {len(all_verts):,} vertices, {len(all_faces):,} faces → {OBJ_FILE}")
-    return OBJ_FILE
+    _write(OBJ_FILE,      main_verts, main_faces, "main geometry")
+    _write(OBJ_ROOF_FILE, roof_verts, roof_faces, "roofs")
 
 
 # ── HTML viewer ───────────────────────────────────────────────────────────────
@@ -113,19 +131,32 @@ HTML_TEMPLATE = """\
   }
   #loading { position:absolute; bottom:16px; left:50%;
              transform:translateX(-50%); font-size:.85rem; color:#888; }
+  #toggles {
+    position:absolute; bottom:16px; right:16px;
+    display:flex; gap:8px; z-index:10;
+  }
+  #toggles button {
+    padding:6px 14px; font-size:.8rem; font-family:monospace;
+    background:rgba(0,0,0,.65); border:1px solid #555;
+    border-radius:5px; cursor:pointer; color:#ccc;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  #toggles button.active {
+    background:rgba(40,160,100,.85); border-color:#2a7; color:#fff;
+  }
 </style>
 </head>
 <body>
 <div id="overlay">
-  <h2>🏭 Car Factory — 3D Walkthrough</h2>
-  <p>WASD / Arrow keys — Move</p>
-  <p>Mouse — Look around</p>
-  <p>Shift — Run &nbsp;|&nbsp; Space / C — Up / Down</p>
-  <p>Esc — Release cursor</p>
+  <h2>&#127981; Car Factory &#8212; 3D Walkthrough</h2>
+  <p>WASD / Arrow keys &#8212; Move</p>
+  <p>Mouse &#8212; Look around</p>
+  <p>Shift &#8212; Run &nbsp;|&nbsp; Space / C &#8212; Up / Down</p>
+  <p>Esc &#8212; Release cursor</p>
   <button onclick="startWalk()">Enter Factory</button>
 </div>
 <div id="crosshair"></div>
-<div id="info">Car Factory &nbsp;|&nbsp; 250 m × 160 m &nbsp;|&nbsp; 4 buildings &nbsp;|&nbsp;
+<div id="info">Car Factory &nbsp;|&nbsp; 250 m &times; 160 m &nbsp;|&nbsp; 4 buildings &nbsp;|&nbsp;
   <span style="color:#ff6633">&#9632; gNB</span> &nbsp;
   <span style="color:#ff4444">&#9679; AGV</span> &nbsp;
   <span style="color:#ffaa00">&#9679; Robotic Arm</span> &nbsp;
@@ -133,7 +164,11 @@ HTML_TEMPLATE = """\
   <span style="color:#ff44aa">&#9679; Safety Sensor</span> &nbsp;
   <span style="color:#44ffaa">&#9679; Worker Tablet</span>
 </div>
-<div id="loading">Loading geometry…</div>
+<div id="toggles">
+  <button id="btn-lines" onclick="toggleLines()">Lines: OFF</button>
+  <button id="btn-roof"  onclick="toggleRoof()"  class="active">Roof: ON</button>
+</div>
+<div id="loading">Loading geometry&#8230;</div>
 
 <script type="importmap">
 {
@@ -171,7 +206,6 @@ sun.position.set(100, 200, 50);
 sun.castShadow = true;
 scene.add(sun);
 
-// Interior point lights (one per building area)
 [
   [42, 6, 45], [147, 5, 47], [227, 4.5, 40], [125, 5, 127]
 ].forEach(([x, y, z]) => {
@@ -180,10 +214,12 @@ scene.add(sun);
   scene.add(l);
 });
 
-// ── gNB / UE markers (injected from config.json) ─────────────────────────────
+// ── gNB / UE data (injected from Python) ─────────────────────────────────────
 const GNB_POSITIONS = __GNB_POSITIONS__;
 const UE_POSITIONS  = __UE_POSITIONS__;
 const UE_TYPES      = __UE_TYPES__;
+const BEST_GNB      = __BEST_GNB__;
+const SLA_PASS      = __SLA_PASS__;
 
 const UE_TYPE_COLOR = {
   agv:           0xff4444,
@@ -202,7 +238,7 @@ const UE_TYPE_LABEL = {
   unknown:       'UE',
 };
 
-// gNB: orange pole (cylinder) + antenna box on top
+// ── gNB markers ──────────────────────────────────────────────────────────────
 const gnbPole = new THREE.CylinderGeometry(0.15, 0.15, 3.0, 8);
 const gnbHead = new THREE.BoxGeometry(0.6, 0.4, 0.25);
 const gnbMatPole = new THREE.MeshLambertMaterial({ color: 0x888888 });
@@ -210,83 +246,95 @@ const gnbMatHead = new THREE.MeshLambertMaterial({ color: 0xff6633, emissive: 0x
 
 GNB_POSITIONS.forEach(([x, y, z], i) => {
   const pole = new THREE.Mesh(gnbPole, gnbMatPole);
-  pole.position.set(x, y - 1.5, z);   // pole hangs down 3m from mount
+  pole.position.set(x, y - 1.5, z);
   scene.add(pole);
   const head = new THREE.Mesh(gnbHead, gnbMatHead);
   head.position.set(x, y, z);
   scene.add(head);
 
-  // label
   const canvas = document.createElement('canvas');
   canvas.width = 128; canvas.height = 40;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.roundRect(2, 2, 124, 36, 6);
-  ctx.fill();
+  ctx.roundRect(2, 2, 124, 36, 6); ctx.fill();
   ctx.fillStyle = '#ff9966';
   ctx.font = 'bold 20px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(`gNB-${i}`, 64, 26);
-  const tex = new THREE.CanvasTexture(canvas);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
   sprite.scale.set(3, 1, 1);
   sprite.position.set(x, y + 0.8, z);
   scene.add(sprite);
 
-  // beacon glow
   const light = new THREE.PointLight(0xff6633, 0.8, 20);
   light.position.set(x, y, z);
   scene.add(light);
 });
 
-// UE: sphere colored by type, label only shown when close
+// ── UE markers ───────────────────────────────────────────────────────────────
 const ueGeo = new THREE.SphereGeometry(0.3, 10, 8);
-const ueMeshes = [];
 
 UE_POSITIONS.forEach(([x, y, z], i) => {
-  const ueType  = UE_TYPES[i] || 'unknown';
-  const color   = UE_TYPE_COLOR[ueType] ?? 0x888888;
-  const label   = UE_TYPE_LABEL[ueType] ?? 'UE';
-  const mat     = new THREE.MeshLambertMaterial({ color });
-  const sphere  = new THREE.Mesh(ueGeo, mat);
+  const ueType = UE_TYPES[i] || 'unknown';
+  const color  = UE_TYPE_COLOR[ueType] ?? 0x888888;
+  const label  = UE_TYPE_LABEL[ueType] ?? 'UE';
+  const sphere = new THREE.Mesh(ueGeo, new THREE.MeshLambertMaterial({ color }));
   sphere.position.set(x, y, z);
   scene.add(sphere);
-  ueMeshes.push(sphere);
 
   const canvas = document.createElement('canvas');
   canvas.width = 112; canvas.height = 36;
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.roundRect(2, 2, 108, 32, 5);
-  ctx.fill();
-  const hex = '#' + color.toString(16).padStart(6, '0');
-  ctx.fillStyle = hex;
+  ctx.roundRect(2, 2, 108, 32, 5); ctx.fill();
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
   ctx.font = 'bold 15px monospace';
   ctx.textAlign = 'center';
   ctx.fillText(`${label}-${i}`, 56, 23);
-  const tex = new THREE.CanvasTexture(canvas);
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
   sprite.scale.set(2.5, 0.8, 1);
   sprite.position.set(x, y + 0.7, z);
   scene.add(sprite);
 });
 
-// ── Load OBJ ─────────────────────────────────────────────────────────────────
-const mat = new THREE.MeshLambertMaterial({
-  color: 0xc8c0b0,
-  side: THREE.DoubleSide,
-  wireframe: false,
+// ── UE→gNB connection lines ───────────────────────────────────────────────────
+// Green = SLA pass, Red = SLA fail (or unknown when no sim_results.json)
+const lineGroup = new THREE.Group();
+lineGroup.visible = false;   // hidden by default; toggle with button
+
+const matPass = new THREE.LineBasicMaterial({ color: 0x00ee88, transparent: true, opacity: 0.55 });
+const matFail = new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.55 });
+const matUnkn = new THREE.LineBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.45 });
+
+UE_POSITIONS.forEach(([ux, uy, uz], i) => {
+  const gnbIdx = (BEST_GNB && BEST_GNB[i] !== undefined) ? BEST_GNB[i] : null;
+  if (gnbIdx === null) return;
+  const [gx, gy, gz] = GNB_POSITIONS[gnbIdx];
+  let mat = matUnkn;
+  if (SLA_PASS && SLA_PASS[i] !== undefined) mat = SLA_PASS[i] ? matPass : matFail;
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(ux, uy, uz),
+    new THREE.Vector3(gx, gy, gz),
+  ]);
+  lineGroup.add(new THREE.Line(geo, mat));
 });
+scene.add(lineGroup);
+
+window.toggleLines = () => {
+  lineGroup.visible = !lineGroup.visible;
+  const btn = document.getElementById('btn-lines');
+  btn.textContent = `Lines: ${lineGroup.visible ? 'ON' : 'OFF'}`;
+  btn.className   = lineGroup.visible ? 'active' : '';
+};
+
+// ── Load main OBJ geometry ────────────────────────────────────────────────────
+const wallMat = new THREE.MeshLambertMaterial({ color: 0xc8c0b0, side: THREE.DoubleSide });
 
 new OBJLoader().load(
   'factory.obj',
   (obj) => {
     obj.traverse(child => {
-      if (child.isMesh) {
-        child.material = mat;
-        child.castShadow = true;
-        child.receiveShadow = true;
-      }
+      if (child.isMesh) { child.material = wallMat; child.castShadow = true; child.receiveShadow = true; }
     });
     scene.add(obj);
     document.getElementById('loading').textContent = 'Geometry loaded. Click "Enter Factory" to start.';
@@ -298,12 +346,37 @@ new OBJLoader().load(
   err => console.error(err)
 );
 
+// ── Load roof OBJ (separate, toggleable) ──────────────────────────────────────
+const roofMat = new THREE.MeshLambertMaterial({ color: 0x8899aa, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+let roofGroup = null;
+
+new OBJLoader().load(
+  'factory_roof.obj',
+  (obj) => {
+    obj.traverse(child => {
+      if (child.isMesh) { child.material = roofMat; child.castShadow = true; child.receiveShadow = true; }
+    });
+    roofGroup = obj;
+    roofGroup.visible = true;
+    scene.add(roofGroup);
+  },
+  null,
+  err => console.warn('No roof geometry:', err)
+);
+
+window.toggleRoof = () => {
+  if (!roofGroup) return;
+  roofGroup.visible = !roofGroup.visible;
+  const btn = document.getElementById('btn-roof');
+  btn.textContent = `Roof: ${roofGroup.visible ? 'ON' : 'OFF'}`;
+  btn.className   = roofGroup.visible ? 'active' : '';
+};
+
 // ── First-person controls ─────────────────────────────────────────────────────
 const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
 
 window.startWalk = () => controls.lock();
-
 controls.addEventListener('lock',   () => document.getElementById('overlay').style.display = 'none');
 controls.addEventListener('unlock', () => document.getElementById('overlay').style.display = 'flex');
 
@@ -336,9 +409,7 @@ function animate() {
     const up   = keys['Space']  ? 1 : 0;
     const dn   = keys['KeyC']   ? 1 : 0;
 
-    dir.z = fwd - back;
-    dir.x = rgt - left;
-    dir.y = up  - dn;
+    dir.z = fwd - back; dir.x = rgt - left; dir.y = up - dn;
     dir.normalize();
 
     velocity.z -= dir.z * speed * 20 * dt;
@@ -349,7 +420,6 @@ function animate() {
     controls.moveForward(-velocity.z * dt);
     controls.getObject().position.y += velocity.y * dt;
 
-    // Floor clamp
     if (controls.getObject().position.y < 1.7)
       controls.getObject().position.y = 1.7;
   }
@@ -358,7 +428,6 @@ function animate() {
 }
 animate();
 
-// ── Resize ────────────────────────────────────────────────────────────────────
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
@@ -375,43 +444,66 @@ class _Handler(http.server.SimpleHTTPRequestHandler):
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=SCENE_DIR, **kw)
     def log_message(self, *_):
-        pass  # suppress request logs
+        pass
 
 
 def _load_markers():
-    """Load gNB/UE positions and UE types from config.json, swapping y↔z for Three.js y-up."""
+    """Load positions from config.json and best_gnb/sla_pass from sim_results.json."""
     cfg_path = "config.json"
     if not os.path.exists(cfg_path):
-        return [], [], []
+        return [], [], [], None, None
+
     with open(cfg_path) as f:
         cfg = json.load(f)
+
     def swap(pos):
         x, y, z = pos[0], pos[1], pos[2]
-        return [x, z, y]   # Three.js: x=x, y=z(height), z=y
+        return [x, z, y]   # Three.js y-up: x=x, y=z(height), z=y
+
     gnbs     = [swap(p) for p in cfg.get("transmitters", [])]
     ues      = [swap(p) for p in cfg.get("static_receivers", [])]
     ue_types = cfg.get("ue_types", ["unknown"] * len(ues))
-    return gnbs, ues, ue_types
+
+    best_gnb = sla_pass = None
+    sim_path = "sim_results.json"
+    if os.path.exists(sim_path):
+        with open(sim_path) as f:
+            res = json.load(f)
+        best_gnb = res.get("best_gnb")
+        sla_pass = res.get("sla_pass")
+
+    return gnbs, ues, ue_types, best_gnb, sla_pass
 
 
 def serve(port=8889):
     export_obj()
-    gnbs, ues, ue_types = _load_markers()
+    gnbs, ues, ue_types, best_gnb, sla_pass = _load_markers()
+    has_sim = best_gnb is not None
+
     html = HTML_TEMPLATE \
         .replace("__GNB_POSITIONS__", json.dumps(gnbs)) \
         .replace("__UE_POSITIONS__",  json.dumps(ues)) \
-        .replace("__UE_TYPES__",      json.dumps(ue_types))
+        .replace("__UE_TYPES__",      json.dumps(ue_types)) \
+        .replace("__BEST_GNB__",      json.dumps(best_gnb)) \
+        .replace("__SLA_PASS__",      json.dumps(sla_pass))
+
     with open(HTML_FILE, "w") as f:
         f.write(html)
+
     print(f"\nFactory viewer ready!")
-    print(f"  Serving from : {os.path.abspath(SCENE_DIR)}/")
+    print(f"  Serving from    : {os.path.abspath(SCENE_DIR)}/")
     print(f"  Open in browser : http://localhost:{port}/")
-    print(f"  gNBs visualized : {len(gnbs)}  |  UEs visualized : {len(ues)}")
+    print(f"  gNBs            : {len(gnbs)}  |  UEs : {len(ues)}")
+    print(f"  Sim results     : {'loaded (lines available)' if has_sim else 'not found — run factory_sim.py first'}")
     print(f"\n  Controls:")
     print(f"    WASD / Arrows — move    Shift — run")
-    print(f"    Mouse — look around     Space/C — up/down")
+    print(f"    Mouse — look            Space/C — up/down")
     print(f"    Esc — release cursor")
+    print(f"\n  Toggles (buttons bottom-right):")
+    print(f"    Lines — UE→best-gNB connections (green=pass, red=fail)")
+    print(f"    Roof  — show/hide building roofs")
     print(f"\nPress Ctrl+C to stop.\n")
+
     with socketserver.TCPServer(("", port), _Handler) as httpd:
         httpd.serve_forever()
 

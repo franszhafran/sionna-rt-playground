@@ -66,12 +66,37 @@ BUILDINGS = [
         "y0": 100.0, "y1": 155.0, "height": 10.0,
         "doors": {
             "south": [
-                {"c":  60.0, "w": 8.0, "h": 4.5},
-                {"c": 150.0, "w": 8.0, "h": 4.5},
-                {"c": 215.0, "w": 8.0, "h": 4.5},
+                {"c":  35.0, "w": 6.0, "h": 4.5},   # Chassis exit
+                {"c":  95.0, "w": 6.0, "h": 4.5},   # Powertrain exit
+                {"c": 155.0, "w": 6.0, "h": 4.5},   # Trim exit
+                {"c": 215.0, "w": 6.0, "h": 4.5},   # Final QC exit
             ],
-            "north": [{"c": 125.0, "w": 6.0, "h": 4.0}],
+            "north": [
+                {"c":  35.0, "w": 5.0, "h": 4.0},
+                {"c": 215.0, "w": 5.0, "h": 4.0},
+            ],
         },
+    },
+]
+
+# ── Internal partition walls — General Assembly divided into 4 sections ────────
+# Sections (x-ranges): Chassis 5–65 | Powertrain 65–125 | Trim 125–185 | Final QC 185–245
+# Each internal wall runs the full y-depth (100–155 m) and has one door opening.
+PARTITION_WALLS = [
+    {
+        "id": "assembly_div_chassis_powertrain",
+        "x": 65.0, "y0": 100.0, "y1": 155.0, "height": 10.0,
+        "doors": [{"c": 120.0, "w": 6.0, "h": 4.5}],
+    },
+    {
+        "id": "assembly_div_powertrain_trim",
+        "x": 125.0, "y0": 100.0, "y1": 155.0, "height": 10.0,
+        "doors": [{"c": 130.0, "w": 6.0, "h": 4.5}],
+    },
+    {
+        "id": "assembly_div_trim_finalqc",
+        "x": 185.0, "y0": 100.0, "y1": 155.0, "height": 10.0,
+        "doors": [{"c": 140.0, "w": 6.0, "h": 4.5}],
     },
 ]
 
@@ -88,10 +113,11 @@ GNBS = [
     # Paint Shop (2)
     [227.0, 25.0,  8.5],
     [227.0, 58.0,  8.5],
-    # General Assembly (3)
-    [ 65.0, 127.0,  9.5],
-    [125.0, 127.0,  9.5],
-    [195.0, 127.0,  9.5],
+    # General Assembly — 4 sections, one gNB per section
+    [ 35.0, 127.0,  9.5],   # Chassis
+    [ 95.0, 127.0,  9.5],   # Powertrain
+    [155.0, 127.0,  9.5],   # Trim
+    [215.0, 127.0,  9.5],   # Final QC
 ]
 
 # ── Static UEs (floor-level workstations / robots) ────────────────────────────
@@ -258,6 +284,26 @@ def _wall_panels(kind, b, doors):
     return panels
 
 
+def _partition_panels(pw):
+    """Both faces of an internal partition wall at fixed x, running along the y-axis.
+
+    Each segment is rendered with panels facing both directions (+x and −x)
+    so the wall blocks and reflects rays arriving from either section.
+    """
+    x  = pw["x"]
+    y0, y1, h = pw["y0"], pw["y1"], pw["height"]
+    panels = []
+    for gap, ya, yb, dh in _split(y0, y1, pw["doors"]):
+        if gap:
+            if dh < h:                       # lintel above door opening
+                panels.append(_panel_east(x, ya, yb, dh, h))
+                panels.append(_panel_west(x, ya, yb, dh, h))
+        else:                                # solid wall segment
+            panels.append(_panel_east(x, ya, yb, 0, h))
+            panels.append(_panel_west(x, ya, yb, 0, h))
+    return panels
+
+
 # ── Scene XML ─────────────────────────────────────────────────────────────────
 
 def _build_xml(surfaces):
@@ -338,6 +384,28 @@ def _floorplan():
                     dx, dc = rc(b["x0"] if wall=="west" else b["x1"], d["c"])
                     if 0<=dc<H and 0<=dx<W: grid[dc][dx] = "D"
 
+    # Partition walls
+    for pw in PARTITION_WALLS:
+        cx = int(round(pw["x"] / 5))
+        ry0 = int(round(pw["y0"] / 5))
+        ry1 = int(round(pw["y1"] / 5))
+        door_rows = {int(round(d["c"] / 5)) for d in pw["doors"]}
+        for r in range(ry0, ry1 + 1):
+            if 0 <= r < H and 0 <= cx < W and grid[r][cx] == " ":
+                grid[r][cx] = "D" if r in door_rows else "│"
+
+    # Section labels inside General Assembly
+    _sections = [
+        (5, 65, "Chassis"), (65, 125, "Powertrain"),
+        (125, 185, "Trim"), (185, 245, "Final QC"),
+    ]
+    asm_mid_r = int(round((100 + 155) / 2 / 5))
+    for sx0, sx1, slabel in _sections:
+        mc = int(round((sx0 + sx1) / 2 / 5)) - len(slabel) // 2
+        for i, ch in enumerate(slabel):
+            if 0 <= asm_mid_r < H and 0 <= mc + i < W and grid[asm_mid_r][mc + i] == " ":
+                grid[asm_mid_r][mc + i] = ch
+
     # gNBs
     for pos in GNBS:
         c, r = rc(pos[0], pos[1])
@@ -408,6 +476,14 @@ def generate():
             _write_ply(os.path.join(MESH_DIR, ply_file), panels)
             xml_surface_list.append((mesh_id, ply_file, mat))
 
+    # Partition walls (internal dividers inside General Assembly)
+    for pw in PARTITION_WALLS:
+        panels = _partition_panels(pw)
+        if panels:
+            ply_file = f"{pw['id']}.ply"
+            _write_ply(os.path.join(MESH_DIR, ply_file), panels)
+            xml_surface_list.append((pw["id"], ply_file, "concrete"))
+
     # Write scene XML
     with open(SCENE_XML, "w") as f:
         f.write(_build_xml(xml_surface_list))
@@ -456,6 +532,10 @@ def generate():
     by_type = {}
     for t in UE_TYPES:
         by_type[t] = by_type.get(t, 0) + 1
+    print(f"\n  Partition walls ({len(PARTITION_WALLS)} internal walls in General Assembly):")
+    for pw in PARTITION_WALLS:
+        print(f"    x={pw['x']:.0f}m  door@y={pw['doors'][0]['c']:.0f}m")
+
     print(f"\n  UEs ({len(UES)} total)  — "
           f"78 Stamping + 117 Body Shop + 32 Paint Shop + 173 Assembly")
     for t, n in sorted(by_type.items()):

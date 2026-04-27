@@ -1,147 +1,92 @@
-# Sionna RT: 3D Beamforming Simulation
+# Sionna RT: Car Factory 5G Simulation
 
-This repository contains a Sionna Ray Tracing simulation with beamforming capabilities, featuring 2 gNBs (base stations) and 8 UEs (user equipment) in a 3D environment.
+Indoor 5G NR simulation of a 250 m × 160 m car factory using Sionna Ray Tracing, with MMSE/MRT beamforming, per-device QoS SLA tracking, and a browser-based 3D walkthrough.
 
-## Features
+## File Overview
 
-- **3D Ray Tracing Environment**: Using Sionna RT with the simple_street_canyon scene
-- **2 gNBs**: Base stations equipped with 8x8 URA (64 antenna elements)
-- **8 UEs**: User equipment with 2x2 URA (4 antenna elements)
-- **Beamforming**: Enabled through large antenna arrays for MRT/ZF algorithms
-- **Frequency**: 3.5 GHz carrier frequency
-- **Ray Tracing**: Up to 5 reflections with 1M ray samples
+| File | What it does |
+|------|-------------|
+| `factory_layout.py` | **Scene generator.** Defines 4 factory buildings, places 10 ceiling-mounted gNBs and ~400 UEs (5 device types, fixed random seed). Writes PLY meshes, `car_factory_scene/car_factory.xml`, and `config.json`. Run this first. |
+| `factory_sim.py` | **Main simulation.** Loads `config.json`, runs ray-tracing (Sionna `PathSolver`) or statistical 3GPP InF-SH channel, computes MMSE or MRT beamforming, then prints per-UE SINR/throughput/latency and QoS SLA pass/fail by device type. |
+| `factory_viewer.py` | **3D browser viewer.** Merges PLY meshes into OBJ, injects gNB/UE markers from `config.json`, generates a Three.js first-person walkthrough (WASD + mouse), and serves it on `http://localhost:8889`. |
+| `config.json` | **Runtime config.** Frequency (3.8 GHz), beamforming method, channel model toggle, antenna array sizes, and all gNB/UE positions. Auto-updated by `factory_layout.py`. |
+| `config_schema.py` | **Pydantic schema.** Validates `config.json` at load time. |
+| `factory_preview.ipynb` | **Notebook.** Interactive Sionna scene preview. |
+| `car_factory_scene/` | **Generated assets.** Mitsuba XML scene, PLY mesh files, and viewer HTML/OBJ (created by the scripts above). |
 
-## Setup
+## Factory Layout
+
+```
+250 m × 160 m  —  4 buildings  —  10 gNBs  —  ~400 UEs
+
+  Stamping Plant   (75×80 m, h=12 m)  —  2 gNBs,  78 UEs
+  Body Shop       (105×85 m, h=10 m)  —  3 gNBs, 117 UEs
+  Paint Shop       (35×70 m, h= 9 m)  —  2 gNBs,  32 UEs
+  General Assembly(240×55 m, h=10 m)  —  3 gNBs, 173 UEs
+```
+
+UE types: `agv`, `robotic_arm`, `vision_camera`, `safety_sensor`, `worker_tablet` — each with its own latency/throughput QoS requirement.
+
+## Quick Start
 
 ### Prerequisites
 
-- Python 3.11 or higher
-- macOS (tested) / Ubuntu 24.04 (recommended)
-- **LLVM** (required for Sionna RT on CPU)
+- Python 3.11+
+- LLVM (required by Sionna RT on CPU)
 
-### Installation
-
-1. **Install LLVM** (required for ray tracing):
-
-   **On macOS:**
-   ```bash
-   # This will compile LLVM from source (may take 30-60 minutes)
-   brew install --build-from-source llvm
-
-   # After installation, set the environment variable
-   # For Apple Silicon:
-   export DRJIT_LIBLLVM_PATH="/opt/homebrew/opt/llvm/lib/libLLVM.dylib"
-
-   # For Intel Mac:
-   export DRJIT_LIBLLVM_PATH="/usr/local/opt/llvm/lib/libLLVM.dylib"
-   ```
-
-   **On Ubuntu:**
-   ```bash
-   sudo apt-get update
-   sudo apt-get install llvm
-   ```
-
-2. Create and activate a virtual environment:
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate
-   ```
-
-3. Install dependencies:
-   ```bash
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   ```
-
-   Alternatively, install Sionna directly:
-   ```bash
-   pip install sionna
-   ```
-
-### Important: LLVM Setup
-
-Sionna RT requires LLVM for CPU-based ray tracing. If you encounter the error:
-```
-ImportError: jit_init_thread_state(): the LLVM backend is inactive because the LLVM shared library ("libLLVM.dylib") could not be found!
-```
-
-Make sure to:
-1. Install LLVM using the instructions above
-2. Set the `DRJIT_LIBLLVM_PATH` environment variable
-3. Add the export command to your shell profile (~/.zshrc or ~/.bashrc) to make it persistent
-
-You can add this to your shell profile:
+**macOS:**
 ```bash
-# Add to ~/.zshrc (macOS default) or ~/.bashrc
+brew install --build-from-source llvm
 export DRJIT_LIBLLVM_PATH="/opt/homebrew/opt/llvm/lib/libLLVM.dylib"  # Apple Silicon
-# OR
-export DRJIT_LIBLLVM_PATH="/usr/local/opt/llvm/lib/libLLVM.dylib"     # Intel Mac
+# export DRJIT_LIBLLVM_PATH="/usr/local/opt/llvm/lib/libLLVM.dylib"   # Intel
 ```
 
-## Running the Simulation
+**Ubuntu:**
+```bash
+sudo apt-get install llvm
+```
 
-Activate the virtual environment and run the simulation:
+### Install
 
 ```bash
-source venv/bin/activate
-python sionna_beamforming_sim.py
+python3 -m venv venv && source venv/bin/activate
+pip install sionna
+```
+
+### Run
+
+```bash
+# 1. Generate scene + config
+python factory_layout.py
+
+# 2. Run simulation (ray tracing or statistical channel)
+python factory_sim.py
+
+# 3. Launch 3D browser viewer
+python factory_viewer.py          # http://localhost:8889
+python factory_viewer.py --port 9000
 ```
 
 ## Configuration
 
-### gNB Configuration
-- **Position 1**: [0.0, 0.0, 30.0] - centered, 30m height
-- **Position 2**: [100.0, 50.0, 30.0] - 100m east, 50m north, 30m height
-- **Antenna Array**: 8x8 URA (64 elements)
-- **Spacing**: Half-wavelength (0.5λ)
+Edit `config.json` (or re-run `factory_layout.py` to regenerate it):
 
-### UE Configuration
-- **8 UEs** distributed in the scene at 1.5m height
-- **Antenna Array**: 2x2 URA (4 elements)
-- **Spacing**: Half-wavelength (0.5λ)
+| Key | Default | Description |
+|-----|---------|-------------|
+| `frequency` | 3.8e9 | Carrier frequency (Hz) |
+| `max_depth` | 3 | Ray reflection depth |
+| `beamforming_method` | `"MMSE"` | `"MMSE"` or `"MRT"` |
+| `use_statistical_channel` | `false` | `true` = fast 3GPP InF-SH model, `false` = full ray tracing |
+| `tx_array` | 4×4 | gNB antenna array (16 elements) |
+| `rx_array` | 1×1 | UE antenna (single element) |
 
-### Ray Tracing Parameters
-- **Max reflection depth**: 5
-- **Number of samples**: 1M rays
-- **LOS**: Enabled
-- **Reflections**: Enabled
-- **Diffraction**: Enabled
-- **Scattering**: Disabled (for speed)
-
-## Next Steps
-
-The simulation sets up the environment and computes propagation paths. You can extend it by:
-
-1. **Compute Beamforming Weights**: Use CSI from paths to calculate MRT/ZF weights
-2. **Evaluate Performance**: Calculate SINR, throughput, and spectral efficiency
-3. **Visualization**:
-   - `scene.preview()` - Interactive 3D visualization
-   - `scene.render_to_file()` - Generate coverage maps
-4. **Add Mobility**: Implement UE movement scenarios
-5. **Multi-user MIMO**: Test different beamforming algorithms
+> Set `use_statistical_channel: true` for fast iteration — ray tracing on a 250×160 m scene is slow.
 
 ## Documentation
 
 - [Sionna Documentation](https://nvlabs.github.io/sionna/)
 - [Sionna RT Tutorial](https://nvlabs.github.io/sionna/examples/Sionna_RT_Introduction.html)
-- [Installation Guide](https://nvlabs.github.io/sionna/installation.html)
-
-## Architecture
-
-```
-gNB 1 (0,0,30m)              gNB 2 (100,50,30m)
-    |                             |
-    |-- 8x8 Antenna Array        |-- 8x8 Antenna Array
-    |                             |
-    +-------- Ray Tracing --------+
-                  |
-         +--------+--------+
-         |                 |
-    UE 1-4           UE 5-8
-    (2x2 arrays)     (2x2 arrays)
-```
 
 ## License
 
-This project uses Sionna, which is licensed under Apache 2.0.
+Uses Sionna (Apache 2.0).
