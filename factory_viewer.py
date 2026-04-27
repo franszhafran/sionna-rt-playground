@@ -15,14 +15,15 @@ Usage:
     python factory_viewer.py --port 9000
 """
 
-import os, struct, json, argparse
+import os, struct, json, argparse, time
 import http.server, socketserver, threading, webbrowser
 
 SCENE_DIR      = "car_factory_scene"
 MESH_DIR       = os.path.join(SCENE_DIR, "meshes")
 OBJ_FILE       = os.path.join(SCENE_DIR, "factory.obj")
-OBJ_ROOF_FILE  = os.path.join(SCENE_DIR, "factory_roof.obj")
-HTML_FILE      = os.path.join(SCENE_DIR, "index.html")
+OBJ_ROOF_FILE       = os.path.join(SCENE_DIR, "factory_roof.obj")
+OBJ_PARTITION_FILE  = os.path.join(SCENE_DIR, "factory_partitions.obj")
+HTML_FILE           = os.path.join(SCENE_DIR, "index.html")
 
 # ── PLY → OBJ exporter ────────────────────────────────────────────────────────
 
@@ -58,11 +59,24 @@ def _is_roof(fname):
     return fname.endswith("_roof.ply")
 
 
+_BLDG_SUFFIXES = (
+    '_floor.ply', '_roof.ply',
+    '_wall_south.ply', '_wall_north.ply', '_wall_west.ply', '_wall_east.ply',
+)
+
+def _is_partition(fname):
+    """True for internal partition-wall PLY files (not ground, not building surfaces)."""
+    if fname == 'ground.ply':
+        return False
+    return not any(fname.endswith(s) for s in _BLDG_SUFFIXES)
+
+
 def export_obj():
-    """Merge all PLY files into two OBJ files: main geometry and roofs."""
-    main_verts, main_faces   = [], []
-    roof_verts, roof_faces   = [], []
-    main_offset = roof_offset = 0
+    """Merge PLY files into three OBJ files: main geometry, roofs, and partition walls."""
+    main_verts, main_faces  = [], []
+    roof_verts, roof_faces  = [], []
+    part_verts, part_faces  = [], []
+    main_off = roof_off = part_off = 0
 
     for fname in sorted(os.listdir(MESH_DIR)):
         if not fname.endswith(".ply"):
@@ -71,13 +85,21 @@ def export_obj():
         if _is_roof(fname):
             roof_verts.extend(verts)
             for f in faces:
-                roof_faces.append(tuple(i + roof_offset + 1 for i in f))
-            roof_offset += len(verts)
+                roof_faces.append(tuple(i + roof_off + 1 for i in f))
+            roof_off += len(verts)
+        elif _is_partition(fname):
+            # Partition walls have both east & west faces in the PLY (needed by Sionna).
+            # Export them to a separate OBJ so the viewer can use FrontSide rendering,
+            # which lets each winding be visible only from its own side — no z-fighting.
+            part_verts.extend(verts)
+            for f in faces:
+                part_faces.append(tuple(i + part_off + 1 for i in f))
+            part_off += len(verts)
         else:
             main_verts.extend(verts)
             for f in faces:
-                main_faces.append(tuple(i + main_offset + 1 for i in f))
-            main_offset += len(verts)
+                main_faces.append(tuple(i + main_off + 1 for i in f))
+            main_off += len(verts)
 
     def _write(path, verts, faces, label):
         with open(path, "w") as f:
@@ -88,8 +110,9 @@ def export_obj():
                 f.write("f " + " ".join(str(i) for i in face) + "\n")
         print(f"Exported {len(verts):,} vertices, {len(faces):,} faces → {path}")
 
-    _write(OBJ_FILE,      main_verts, main_faces, "main geometry")
-    _write(OBJ_ROOF_FILE, roof_verts, roof_faces, "roofs")
+    _write(OBJ_FILE,           main_verts, main_faces, "main geometry")
+    _write(OBJ_ROOF_FILE,      roof_verts, roof_faces, "roofs")
+    _write(OBJ_PARTITION_FILE, part_verts, part_faces, "partition walls")
 
 
 # ── HTML viewer ───────────────────────────────────────────────────────────────
@@ -157,6 +180,7 @@ HTML_TEMPLATE = """\
 </div>
 <div id="crosshair"></div>
 <div id="info">Car Factory &nbsp;|&nbsp; 250 m &times; 160 m &nbsp;|&nbsp; 4 buildings &nbsp;|&nbsp;
+  <span style="color:#d0b060">&#9644; Section Wall</span> &nbsp;
   <span style="color:#ff6633">&#9632; gNB</span> &nbsp;
   <span style="color:#ff4444">&#9679; AGV</span> &nbsp;
   <span style="color:#ffaa00">&#9679; Robotic Arm</span> &nbsp;
@@ -220,6 +244,7 @@ const UE_POSITIONS  = __UE_POSITIONS__;
 const UE_TYPES      = __UE_TYPES__;
 const BEST_GNB      = __BEST_GNB__;
 const SLA_PASS      = __SLA_PASS__;
+const V             = '__CACHE_BUST__';   // cache-bust version injected by Python
 
 const UE_TYPE_COLOR = {
   agv:           0xff4444,
@@ -331,7 +356,7 @@ window.toggleLines = () => {
 const wallMat = new THREE.MeshLambertMaterial({ color: 0xc8c0b0, side: THREE.DoubleSide });
 
 new OBJLoader().load(
-  'factory.obj',
+  `factory.obj?v=${V}`,
   (obj) => {
     obj.traverse(child => {
       if (child.isMesh) { child.material = wallMat; child.castShadow = true; child.receiveShadow = true; }
@@ -346,12 +371,28 @@ new OBJLoader().load(
   err => console.error(err)
 );
 
+// ── Load partition walls (internal section dividers with door openings) ────────
+// Rendered with FrontSide so east & west panels don't z-fight each other.
+const partMat = new THREE.MeshLambertMaterial({ color: 0xd0b060, side: THREE.FrontSide });
+
+new OBJLoader().load(
+  `factory_partitions.obj?v=${V}`,
+  (obj) => {
+    obj.traverse(child => {
+      if (child.isMesh) { child.material = partMat; child.castShadow = true; child.receiveShadow = true; }
+    });
+    scene.add(obj);
+  },
+  null,
+  err => console.warn('No partition geometry:', err)
+);
+
 // ── Load roof OBJ (separate, toggleable) ──────────────────────────────────────
 const roofMat = new THREE.MeshLambertMaterial({ color: 0x8899aa, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
 let roofGroup = null;
 
 new OBJLoader().load(
-  'factory_roof.obj',
+  `factory_roof.obj?v=${V}`,
   (obj) => {
     obj.traverse(child => {
       if (child.isMesh) { child.material = roofMat; child.castShadow = true; child.receiveShadow = true; }
@@ -485,7 +526,8 @@ def serve(port=8889):
         .replace("__UE_POSITIONS__",  json.dumps(ues)) \
         .replace("__UE_TYPES__",      json.dumps(ue_types)) \
         .replace("__BEST_GNB__",      json.dumps(best_gnb)) \
-        .replace("__SLA_PASS__",      json.dumps(sla_pass))
+        .replace("__SLA_PASS__",      json.dumps(sla_pass)) \
+        .replace("__CACHE_BUST__",    str(int(time.time())))
 
     with open(HTML_FILE, "w") as f:
         f.write(html)
