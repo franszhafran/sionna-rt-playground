@@ -1,0 +1,143 @@
+<scene version="2.1.0">
+
+    <!-- ITU Radio Materials -->
+
+    <bsdf type="itu-radio-material" id="concrete">
+        <string name="type" value="concrete"/>
+        <float name="thickness" value="0.3"/>
+    </bsdf>
+
+    <bsdf type="itu-radio-material" id="metal">
+        <string name="type" value="metal"/>
+        <float name="thickness" value="0.01"/>
+    </bsdf>
+
+    <!-- Building Surfaces -->
+
+    <shape type="ply" id="ground">
+        <string name="filename" value="meshes/ground.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="stamping_floor">
+        <string name="filename" value="meshes/stamping_floor.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="stamping_wall_south">
+        <string name="filename" value="meshes/stamping_wall_south.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="stamping_wall_north">
+        <string name="filename" value="meshes/stamping_wall_north.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="stamping_wall_west">
+        <string name="filename" value="meshes/stamping_wall_west.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="stamping_wall_east">
+        <string name="filename" value="meshes/stamping_wall_east.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="body_shop_floor">
+        <string name="filename" value="meshes/body_shop_floor.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="body_shop_wall_south">
+        <string name="filename" value="meshes/body_shop_wall_south.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="body_shop_wall_north">
+        <string name="filename" value="meshes/body_shop_wall_north.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="body_shop_wall_west">
+        <string name="filename" value="meshes/body_shop_wall_west.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="body_shop_wall_east">
+        <string name="filename" value="meshes/body_shop_wall_east.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="paint_shop_floor">
+        <string name="filename" value="meshes/paint_shop_floor.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="paint_shop_wall_south">
+        <string name="filename" value="meshes/paint_shop_wall_south.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="paint_shop_wall_north">
+        <string name="filename" value="meshes/paint_shop_wall_north.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="paint_shop_wall_west">
+        <string name="filename" value="meshes/paint_shop_wall_west.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="paint_shop_wall_east">
+        <string name="filename" value="meshes/paint_shop_wall_east.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="assembly_floor">
+        <string name="filename" value="meshes/assembly_floor.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="assembly_wall_south">
+        <string name="filename" value="meshes/assembly_wall_south.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="assembly_wall_north">
+        <string name="filename" value="meshes/assembly_wall_north.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="assembly_wall_west">
+        <string name="filename" value="meshes/assembly_wall_west.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+    <shape type="ply" id="assembly_wall_east">
+        <string name="filename" value="meshes/assembly_wall_east.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="concrete" name="bsdf"/>
+    </shape>
+
+</scene>

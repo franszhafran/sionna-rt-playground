@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Car Factory — 3D Walkthrough</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#111; overflow:hidden; font-family:monospace; color:#eee; }
+  #info {
+    position:absolute; top:12px; left:50%; transform:translateX(-50%);
+    background:rgba(0,0,0,.6); padding:8px 18px; border-radius:6px;
+    text-align:center; pointer-events:none; z-index:10;
+  }
+  #crosshair {
+    position:absolute; top:50%; left:50%;
+    transform:translate(-50%,-50%);
+    width:16px; height:16px; pointer-events:none; opacity:.7;
+  }
+  #crosshair::before, #crosshair::after {
+    content:''; position:absolute; background:#fff;
+  }
+  #crosshair::before { width:2px; height:100%; left:50%; transform:translateX(-50%); }
+  #crosshair::after  { height:2px; width:100%; top:50%;  transform:translateY(-50%); }
+  #overlay {
+    position:absolute; inset:0; background:rgba(0,0,0,.75);
+    display:flex; flex-direction:column;
+    align-items:center; justify-content:center; z-index:20;
+  }
+  #overlay h2 { font-size:1.6rem; margin-bottom:12px; }
+  #overlay p  { margin:4px 0; font-size:.95rem; color:#aaa; }
+  #overlay button {
+    margin-top:20px; padding:10px 28px; font-size:1rem;
+    background:#2a7; border:none; border-radius:6px; cursor:pointer; color:#fff;
+  }
+  #loading { position:absolute; bottom:16px; left:50%;
+             transform:translateX(-50%); font-size:.85rem; color:#888; }
+</style>
+</head>
+<body>
+<div id="overlay">
+  <h2>🏭 Car Factory — 3D Walkthrough</h2>
+  <p>WASD / Arrow keys — Move</p>
+  <p>Mouse — Look around</p>
+  <p>Shift — Run &nbsp;|&nbsp; Space / C — Up / Down</p>
+  <p>Esc — Release cursor</p>
+  <button onclick="startWalk()">Enter Factory</button>
+</div>
+<div id="crosshair"></div>
+<div id="info">Car Factory &nbsp;|&nbsp; 250 m × 160 m &nbsp;|&nbsp; 4 buildings &nbsp;|&nbsp;
+  <span style="color:#ff6633">&#9632; gNB</span> &nbsp;
+  <span style="color:#ff4444">&#9679; AGV</span> &nbsp;
+  <span style="color:#ffaa00">&#9679; Robotic Arm</span> &nbsp;
+  <span style="color:#aa44ff">&#9679; Vision Camera</span> &nbsp;
+  <span style="color:#ff44aa">&#9679; Safety Sensor</span> &nbsp;
+  <span style="color:#44ffaa">&#9679; Worker Tablet</span>
+</div>
+<div id="loading">Loading geometry…</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three":              "https://cdn.jsdelivr.net/npm/three@0.163/build/three.module.js",
+    "three/addons/":      "https://cdn.jsdelivr.net/npm/three@0.163/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+
+// ── Scene setup ──────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.FogExp2(0xd0e8f0, 0.003);
+
+const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(125, 1.7, -80);   // start outside, looking at factory
+
+// ── Lighting ─────────────────────────────────────────────────────────────────
+scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+
+const sun = new THREE.DirectionalLight(0xfff5e0, 1.2);
+sun.position.set(100, 200, 50);
+sun.castShadow = true;
+scene.add(sun);
+
+// Interior point lights (one per building area)
+[
+  [42, 6, 45], [147, 5, 47], [227, 4.5, 40], [125, 5, 127]
+].forEach(([x, y, z]) => {
+  const l = new THREE.PointLight(0xffe8c0, 1.5, 80);
+  l.position.set(x, y, z);
+  scene.add(l);
+});
+
+// ── gNB / UE markers (injected from config.json) ─────────────────────────────
+const GNB_POSITIONS = [[27.0, 11.5, 30.0], [57.0, 11.5, 60.0], [120.0, 9.5, 35.0], [147.0, 9.5, 55.0], [175.0, 9.5, 75.0], [227.0, 8.5, 25.0], [227.0, 8.5, 58.0], [65.0, 9.5, 127.0], [125.0, 9.5, 127.0], [195.0, 9.5, 127.0]];
+const UE_POSITIONS  = [[51.84, 1.01, 10.8], [23.96, 2.11, 62.03], [68.78, 1.41, 15.26], [11.0, 1.64, 24.74], [10.78, 2.04, 23.32], [45.51, 1.87, 24.87], [63.23, 2.47, 9.47], [55.78, 0.68, 33.5], [73.13, 0.51, 33.23], [15.48, 1.91, 70.02], [63.08, 1.72, 61.54], [74.2, 1.77, 36.25], [64.57, 2.62, 53.53], [47.68, 0.38, 59.73], [24.27, 0.47, 29.84], [24.6, 1.01, 16.27], [51.59, 1.27, 35.27], [23.04, 2.83, 28.22], [52.42, 0.72, 52.86], [57.85, 1.29, 20.76], [75.3, 1.78, 55.08], [54.87, 2.38, 69.69], [24.35, 1.12, 11.31], [26.94, 2.84, 24.19], [67.72, 2.05, 31.66], [35.51, 1.51, 74.85], [26.75, 1.79, 26.76], [26.6, 2.72, 51.09], [35.76, 2.99, 24.79], [43.14, 0.38, 15.55], [16.35, 2.43, 54.18], [37.28, 1.3, 13.57], [75.74, 2.92, 47.1], [66.67, 2.23, 9.83], [54.67, 0.98, 47.66], [51.94, 1.45, 17.03], [39.4, 2.66, 77.67], [26.65, 0.74, 45.04], [70.15, 1.07, 71.68], [51.81, 0.67, 52.85], [60.09, 2.39, 47.84], [44.53, 1.14, 9.04], [10.3, 2.67, 75.9], [64.72, 0.41, 31.14], [67.83, 0.49, 77.18], [41.56, 2.34, 13.98], [60.31, 1.56, 18.24], [45.84, 2.65, 28.08], [37.35, 1.73, 24.25], [57.91, 1.11, 23.48], [75.68, 1.45, 55.79], [43.68, 0.87, 17.71], [31.65, 0.88, 51.36], [23.75, 1.99, 14.11], [24.34, 2.61, 74.19], [13.75, 2.09, 26.14], [23.35, 2.82, 18.53], [47.26, 2.41, 43.03], [63.1, 0.52, 22.71], [37.88, 1.53, 39.5], [57.85, 2.96, 57.48], [15.59, 1.18, 37.99], [66.73, 0.77, 26.9], [39.06, 1.02, 39.38], [25.74, 1.47, 75.48], [66.71, 0.39, 48.62], [75.95, 2.91, 69.19], [71.07, 0.71, 70.11], [41.54, 1.35, 24.39], [12.93, 2.96, 36.29], [26.77, 1.5, 65.45], [37.34, 2.99, 77.93], [46.24, 0.68, 60.73], [28.88, 1.84, 78.75], [45.33, 0.41, 62.85], [48.14, 2.59, 45.21], [19.55, 0.47, 78.18], [21.45, 2.11, 51.84], [121.81, 2.7, 18.23], [122.88, 1.95, 54.78], [139.66, 1.69, 53.94], [189.67, 2.22, 24.73], [122.15, 2.1, 39.48], [128.1, 2.32, 33.35], [106.04, 3.0, 44.29], [195.62, 0.84, 14.64], [124.72, 2.67, 80.86], [184.29, 0.68, 37.45], [179.87, 1.93, 63.17], [194.76, 0.27, 59.36], [178.26, 2.07, 32.05], [190.08, 0.57, 19.34], [109.38, 1.0, 51.6], [157.67, 0.81, 64.26], [160.52, 1.59, 29.33], [186.82, 0.5, 74.15], [140.09, 0.26, 30.3], [173.8, 0.97, 58.06], [170.9, 1.43, 51.48], [99.94, 2.68, 14.79], [186.68, 2.55, 51.01], [155.5, 0.6, 20.4], [128.9, 2.44, 78.22], [182.49, 0.83, 78.22], [123.2, 2.4, 16.92], [184.76, 1.96, 40.29], [113.99, 2.63, 80.6], [193.69, 2.67, 71.43], [101.4, 1.16, 65.72], [189.29, 2.63, 70.77], [177.64, 2.42, 29.54], [109.49, 2.61, 76.16], [120.58, 1.52, 71.88], [128.6, 0.88, 70.24], [101.3, 1.15, 23.87], [182.84, 1.02, 83.45], [161.22, 2.95, 39.78], [151.01, 0.57, 81.32], [193.13, 2.9, 22.75], [124.75, 1.45, 17.35], [169.67, 1.92, 33.15], [148.61, 1.84, 38.66], [123.71, 0.25, 63.58], [188.78, 2.23, 50.46], [170.97, 1.25, 60.64], [105.79, 1.16, 60.15], [129.45, 2.23, 74.3], [128.13, 1.37, 32.81], [138.03, 0.6, 31.77], [139.78, 2.11, 81.41], [186.57, 1.08, 56.39], [152.15, 1.04, 9.03], [140.7, 2.05, 53.66], [144.1, 0.84, 43.05], [144.9, 2.44, 78.39], [115.46, 1.67, 15.53], [160.4, 2.5, 34.81], [171.86, 0.87, 60.81], [118.32, 0.92, 10.88], [145.09, 0.45, 74.43], [139.2, 0.78, 57.49], [166.55, 0.92, 47.07], [162.64, 2.32, 9.43], [173.69, 1.42, 17.21], [116.06, 1.67, 82.76], [103.87, 2.58, 28.19], [143.28, 2.09, 70.71], [194.83, 2.86, 54.85], [185.47, 2.23, 56.17], [147.96, 1.76, 72.95], [186.03, 1.56, 66.26], [124.14, 2.0, 28.04], [173.28, 1.97, 49.14], [125.64, 1.04, 14.97], [125.36, 1.74, 33.62], [112.42, 2.16, 26.81], [167.52, 1.37, 13.95], [151.63, 0.82, 41.01], [139.75, 1.86, 78.67], [166.47, 2.36, 74.97], [135.9, 1.22, 9.45], [172.09, 2.87, 74.72], [139.65, 1.75, 66.56], [157.52, 0.85, 25.98], [141.28, 1.17, 11.23], [164.88, 0.7, 40.13], [144.34, 1.96, 18.83], [101.62, 1.8, 39.34], [101.63, 0.62, 58.49], [143.78, 1.29, 12.87], [119.53, 2.34, 34.17], [135.78, 2.54, 66.9], [123.47, 0.3, 15.31], [151.32, 1.21, 85.99], [162.06, 2.04, 69.15], [172.16, 0.8, 82.12], [100.98, 0.6, 20.73], [163.94, 0.85, 52.43], [166.85, 0.71, 68.05], [157.9, 0.56, 66.59], [178.47, 0.55, 83.28], [101.49, 2.11, 33.02], [191.94, 2.22, 39.54], [106.37, 1.97, 62.18], [108.88, 2.59, 68.48], [157.24, 2.96, 18.32], [174.92, 1.43, 35.73], [134.95, 1.19, 47.96], [181.41, 0.54, 72.32], [192.2, 2.53, 57.94], [167.61, 2.27, 42.53], [192.65, 2.47, 29.8], [151.2, 1.45, 46.23], [169.91, 2.59, 29.67], [179.58, 2.67, 15.67], [220.58, 1.93, 37.81], [224.23, 2.59, 10.78], [218.91, 2.44, 22.15], [223.19, 2.18, 63.58], [221.46, 2.86, 9.63], [216.31, 1.59, 53.64], [234.47, 2.03, 51.82], [227.25, 0.51, 58.16], [219.98, 1.09, 51.89], [229.7, 1.71, 38.34], [225.49, 1.16, 55.25], [232.98, 0.94, 25.8], [217.26, 0.58, 20.94], [228.47, 0.76, 56.26], [219.84, 2.24, 39.02], [240.37, 1.03, 41.53], [216.71, 0.88, 21.04], [218.84, 1.72, 9.88], [221.41, 1.77, 69.41], [232.83, 2.64, 16.83], [227.25, 1.83, 63.11], [226.67, 0.76, 36.31], [215.39, 1.56, 67.35], [236.2, 0.45, 33.84], [231.0, 0.66, 12.32], [229.2, 2.98, 27.84], [217.2, 1.92, 56.4], [235.35, 1.69, 22.99], [226.16, 2.62, 36.45], [240.73, 1.96, 27.93], [230.46, 2.86, 54.89], [219.61, 2.07, 22.08], [45.44, 0.46, 112.17], [9.62, 1.88, 125.17], [76.57, 2.19, 114.88], [172.09, 2.14, 125.34], [223.35, 1.97, 141.03], [162.39, 1.42, 147.88], [135.34, 2.75, 134.44], [200.78, 0.71, 107.36], [80.37, 1.82, 139.2], [75.96, 2.14, 109.84], [171.34, 1.63, 148.31], [123.56, 0.36, 107.78], [109.23, 0.94, 119.15], [30.19, 2.55, 149.21], [142.45, 3.0, 148.69], [164.97, 0.36, 116.67], [184.45, 2.04, 126.11], [221.53, 1.86, 112.53], [156.27, 0.5, 127.11], [89.73, 2.09, 119.67], [207.99, 2.16, 119.5], [75.87, 2.49, 148.42], [136.62, 1.11, 125.38], [84.0, 1.36, 149.6], [128.39, 2.06, 150.44], [134.88, 0.77, 123.42], [92.93, 1.97, 139.55], [185.32, 1.76, 113.57], [224.22, 2.17, 124.59], [37.17, 1.92, 149.74], [64.52, 1.76, 111.44], [137.12, 2.98, 108.38], [220.8, 0.57, 125.69], [202.06, 2.22, 127.42], [127.06, 2.55, 116.85], [236.42, 1.77, 115.46], [97.99, 1.65, 147.33], [213.0, 1.01, 144.61], [192.28, 2.82, 123.5], [126.8, 1.03, 142.57], [78.26, 3.0, 131.59], [122.6, 1.73, 110.98], [89.07, 1.74, 129.94], [114.64, 0.77, 119.12], [170.82, 0.89, 130.87], [188.93, 2.3, 106.05], [172.61, 1.31, 142.14], [162.98, 2.95, 142.58], [123.92, 1.63, 105.74], [145.92, 2.65, 144.88], [111.15, 1.51, 128.72], [176.61, 2.05, 123.27], [44.81, 2.92, 126.07], [87.55, 2.04, 136.56], [206.61, 2.61, 144.06], [97.16, 2.23, 118.88], [185.18, 0.35, 145.0], [24.87, 2.78, 133.66], [240.4, 1.44, 139.1], [31.84, 2.65, 133.79], [111.93, 2.73, 136.62], [19.67, 1.06, 141.42], [95.96, 1.71, 110.84], [140.3, 0.72, 141.25], [27.32, 1.95, 144.93], [64.87, 0.64, 146.9], [115.99, 0.95, 115.94], [11.18, 2.73, 141.82], [166.21, 1.46, 111.42], [89.17, 2.01, 131.62], [107.44, 2.57, 115.75], [55.22, 1.58, 122.08], [64.03, 1.83, 130.88], [239.3, 2.94, 117.88], [161.71, 1.81, 116.9], [168.11, 0.38, 139.0], [149.69, 2.74, 127.35], [75.4, 1.92, 141.55], [90.74, 1.96, 133.92], [166.24, 2.06, 137.88], [203.49, 2.73, 133.53], [158.95, 1.46, 118.52], [143.46, 0.5, 138.42], [77.47, 0.73, 139.13], [39.66, 2.92, 129.35], [132.16, 2.53, 146.93], [68.62, 1.58, 142.76], [196.11, 1.18, 139.09], [35.72, 0.64, 149.26], [233.23, 2.24, 144.43], [236.35, 2.46, 149.46], [93.86, 0.29, 141.16], [133.48, 2.1, 125.37], [164.98, 2.51, 131.47], [227.15, 0.89, 109.09], [14.81, 1.79, 145.56], [221.34, 0.42, 114.4], [200.13, 1.08, 146.74], [103.72, 2.85, 110.57], [79.61, 0.52, 127.15], [214.84, 1.5, 110.38], [164.55, 2.85, 138.93], [106.24, 0.67, 138.89], [105.25, 1.6, 108.65], [103.68, 0.34, 148.72], [94.96, 2.86, 124.84], [207.46, 2.14, 108.67], [135.32, 1.24, 149.96], [101.37, 0.59, 112.92], [205.74, 2.07, 125.37], [157.88, 0.31, 132.07], [191.54, 0.6, 115.45], [139.98, 2.35, 107.22], [57.06, 2.64, 114.15], [85.23, 2.73, 110.94], [9.66, 0.65, 144.35], [39.16, 0.73, 115.78], [162.37, 0.29, 105.21], [192.28, 1.14, 115.18], [49.43, 2.29, 106.46], [131.05, 1.56, 139.05], [189.5, 0.55, 128.12], [125.89, 0.37, 148.43], [190.71, 1.68, 144.75], [115.27, 0.42, 149.31], [120.12, 2.14, 122.88], [122.74, 0.45, 146.76], [27.74, 0.43, 132.59], [72.8, 1.76, 133.75], [84.44, 1.71, 150.75], [114.26, 0.52, 132.46], [171.81, 2.04, 144.08], [187.4, 0.84, 137.88], [113.76, 1.18, 114.74], [114.21, 0.51, 123.55], [108.01, 1.28, 135.26], [44.41, 0.43, 147.38], [201.97, 0.52, 108.38], [180.4, 1.78, 142.15], [145.06, 1.16, 130.39], [37.36, 2.08, 120.62], [183.07, 2.23, 144.8], [233.67, 1.22, 132.22], [143.08, 2.06, 114.0], [61.02, 2.57, 109.09], [94.27, 1.83, 139.84], [196.28, 2.93, 143.72], [198.88, 2.02, 132.84], [15.09, 2.53, 147.67], [71.05, 2.18, 112.48], [80.68, 0.27, 119.97], [210.81, 1.35, 130.62], [41.91, 0.33, 133.76], [182.1, 1.4, 114.11], [88.09, 2.23, 121.39], [189.23, 0.48, 130.68], [21.21, 1.95, 111.4], [165.36, 2.07, 116.79], [121.67, 1.0, 124.78], [184.15, 1.43, 109.35], [74.71, 1.59, 135.89], [163.77, 1.34, 106.13], [148.04, 1.08, 104.36], [58.01, 0.95, 110.45], [85.12, 2.3, 104.36], [49.76, 2.19, 121.87], [125.06, 2.47, 143.17], [25.72, 0.37, 144.5], [13.35, 2.62, 147.29], [142.58, 2.2, 130.95], [105.9, 0.31, 109.41], [84.35, 1.95, 141.66], [202.03, 0.49, 147.23]];
+const UE_TYPES      = ["robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "worker_tablet", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "vision_camera", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "robotic_arm", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "agv", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor", "safety_sensor"];
+
+const UE_TYPE_COLOR = {
+  agv:           0xff4444,
+  robotic_arm:   0xffaa00,
+  vision_camera: 0xaa44ff,
+  safety_sensor: 0xff44aa,
+  worker_tablet: 0x44ffaa,
+  unknown:       0x888888,
+};
+const UE_TYPE_LABEL = {
+  agv:           'AGV',
+  robotic_arm:   'Arm',
+  vision_camera: 'Cam',
+  safety_sensor: 'Safe',
+  worker_tablet: 'Tab',
+  unknown:       'UE',
+};
+
+// gNB: orange pole (cylinder) + antenna box on top
+const gnbPole = new THREE.CylinderGeometry(0.15, 0.15, 3.0, 8);
+const gnbHead = new THREE.BoxGeometry(0.6, 0.4, 0.25);
+const gnbMatPole = new THREE.MeshLambertMaterial({ color: 0x888888 });
+const gnbMatHead = new THREE.MeshLambertMaterial({ color: 0xff6633, emissive: 0x441100 });
+
+GNB_POSITIONS.forEach(([x, y, z], i) => {
+  const pole = new THREE.Mesh(gnbPole, gnbMatPole);
+  pole.position.set(x, y - 1.5, z);   // pole hangs down 3m from mount
+  scene.add(pole);
+  const head = new THREE.Mesh(gnbHead, gnbMatHead);
+  head.position.set(x, y, z);
+  scene.add(head);
+
+  // label
+  const canvas = document.createElement('canvas');
+  canvas.width = 128; canvas.height = 40;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.roundRect(2, 2, 124, 36, 6);
+  ctx.fill();
+  ctx.fillStyle = '#ff9966';
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`gNB-${i}`, 64, 26);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sprite.scale.set(3, 1, 1);
+  sprite.position.set(x, y + 0.8, z);
+  scene.add(sprite);
+
+  // beacon glow
+  const light = new THREE.PointLight(0xff6633, 0.8, 20);
+  light.position.set(x, y, z);
+  scene.add(light);
+});
+
+// UE: sphere colored by type, label only shown when close
+const ueGeo = new THREE.SphereGeometry(0.3, 10, 8);
+const ueMeshes = [];
+
+UE_POSITIONS.forEach(([x, y, z], i) => {
+  const ueType  = UE_TYPES[i] || 'unknown';
+  const color   = UE_TYPE_COLOR[ueType] ?? 0x888888;
+  const label   = UE_TYPE_LABEL[ueType] ?? 'UE';
+  const mat     = new THREE.MeshLambertMaterial({ color });
+  const sphere  = new THREE.Mesh(ueGeo, mat);
+  sphere.position.set(x, y, z);
+  scene.add(sphere);
+  ueMeshes.push(sphere);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = 112; canvas.height = 36;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.roundRect(2, 2, 108, 32, 5);
+  ctx.fill();
+  const hex = '#' + color.toString(16).padStart(6, '0');
+  ctx.fillStyle = hex;
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${label}-${i}`, 56, 23);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  sprite.scale.set(2.5, 0.8, 1);
+  sprite.position.set(x, y + 0.7, z);
+  scene.add(sprite);
+});
+
+// ── Load OBJ ─────────────────────────────────────────────────────────────────
+const mat = new THREE.MeshLambertMaterial({
+  color: 0xc8c0b0,
+  side: THREE.DoubleSide,
+  wireframe: false,
+});
+
+new OBJLoader().load(
+  'factory.obj',
+  (obj) => {
+    obj.traverse(child => {
+      if (child.isMesh) {
+        child.material = mat;
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    scene.add(obj);
+    document.getElementById('loading').textContent = 'Geometry loaded. Click "Enter Factory" to start.';
+  },
+  xhr => {
+    const pct = xhr.total ? Math.round(xhr.loaded / xhr.total * 100) : '…';
+    document.getElementById('loading').textContent = `Loading… ${pct}%`;
+  },
+  err => console.error(err)
+);
+
+// ── First-person controls ─────────────────────────────────────────────────────
+const controls = new PointerLockControls(camera, renderer.domElement);
+scene.add(controls.getObject());
+
+window.startWalk = () => controls.lock();
+
+controls.addEventListener('lock',   () => document.getElementById('overlay').style.display = 'none');
+controls.addEventListener('unlock', () => document.getElementById('overlay').style.display = 'flex');
+
+// ── Movement ──────────────────────────────────────────────────────────────────
+const keys = {};
+addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keyup',   e => keys[e.code] = false);
+
+const velocity = new THREE.Vector3();
+const dir      = new THREE.Vector3();
+let prev = performance.now();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const now = performance.now();
+  const dt  = Math.min((now - prev) / 1000, 0.05);
+  prev = now;
+
+  const speed = keys['ShiftLeft'] || keys['ShiftRight'] ? 20 : 7;
+
+  if (controls.isLocked) {
+    velocity.x -= velocity.x * 10 * dt;
+    velocity.z -= velocity.z * 10 * dt;
+    velocity.y -= velocity.y * 10 * dt;
+
+    const fwd  = (keys['KeyW'] || keys['ArrowUp'])    ? 1 : 0;
+    const back = (keys['KeyS'] || keys['ArrowDown'])  ? 1 : 0;
+    const left = (keys['KeyA'] || keys['ArrowLeft'])  ? 1 : 0;
+    const rgt  = (keys['KeyD'] || keys['ArrowRight']) ? 1 : 0;
+    const up   = keys['Space']  ? 1 : 0;
+    const dn   = keys['KeyC']   ? 1 : 0;
+
+    dir.z = fwd - back;
+    dir.x = rgt - left;
+    dir.y = up  - dn;
+    dir.normalize();
+
+    velocity.z -= dir.z * speed * 20 * dt;
+    velocity.x -= dir.x * speed * 20 * dt;
+    velocity.y += dir.y * speed * 20 * dt;
+
+    controls.moveRight(-velocity.x * dt);
+    controls.moveForward(-velocity.z * dt);
+    controls.getObject().position.y += velocity.y * dt;
+
+    // Floor clamp
+    if (controls.getObject().position.y < 1.7)
+      controls.getObject().position.y = 1.7;
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ── Resize ────────────────────────────────────────────────────────────────────
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
