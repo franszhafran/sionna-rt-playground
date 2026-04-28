@@ -220,7 +220,7 @@ scene.background = new THREE.Color(0x87ceeb);
 scene.fog = new THREE.FogExp2(0xd0e8f0, 0.003);
 
 const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
-camera.position.set(125, 1.7, -80);   // start outside, looking at factory
+camera.position.set(35, 3, 127);   // inside Chassis section of General Assembly
 
 // ── Lighting ─────────────────────────────────────────────────────────────────
 scene.add(new THREE.AmbientLight(0xffffff, 0.7));
@@ -244,6 +244,7 @@ const UE_POSITIONS  = __UE_POSITIONS__;
 const UE_TYPES      = __UE_TYPES__;
 const BEST_GNB      = __BEST_GNB__;
 const SLA_PASS      = __SLA_PASS__;
+const BUILDINGS     = __BUILDINGS__;
 const V             = '__CACHE_BUST__';   // cache-bust version injected by Python
 
 const UE_TYPE_COLOR = {
@@ -387,36 +388,45 @@ new OBJLoader().load(
   err => console.warn('No partition geometry:', err)
 );
 
-// ── Load roof OBJ (separate, toggleable) ──────────────────────────────────────
-const roofMat = new THREE.MeshLambertMaterial({ color: 0x8899aa, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
-let roofGroup = null;
+// ── Viewer-only roof planes (one PlaneGeometry per building; not in Sionna scene)
+const roofMat = new THREE.MeshLambertMaterial({ color: 0x8899aa, side: THREE.DoubleSide, transparent: true, opacity: 0.82 });
+const roofMeshes = [];
+BUILDINGS.forEach(({x0, x1, y0, y1, height}) => {
+  const geo  = new THREE.PlaneGeometry(x1 - x0, y1 - y0);
+  const mesh = new THREE.Mesh(geo, roofMat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set((x0 + x1) / 2, height, (y0 + y1) / 2);
+  roofMeshes.push(mesh);
+  scene.add(mesh);
+});
 
+// Also load PLY-based roofs if factory_layout was run with ENABLE_ROOFS=True
+let roofGroup = null;
 new OBJLoader().load(
   `factory_roof.obj?v=${V}`,
   (obj) => {
-    obj.traverse(child => {
-      if (child.isMesh) { child.material = roofMat; child.castShadow = true; child.receiveShadow = true; }
-    });
-    roofGroup = obj;
-    roofGroup.visible = true;
-    scene.add(roofGroup);
+    let hasMesh = false;
+    obj.traverse(child => { if (child.isMesh) { child.material = roofMat; hasMesh = true; } });
+    if (hasMesh) { roofGroup = obj; scene.add(roofGroup); }
   },
   null,
-  err => console.warn('No roof geometry:', err)
+  () => {}
 );
 
 window.toggleRoof = () => {
-  if (!roofGroup) return;
-  roofGroup.visible = !roofGroup.visible;
+  const newVis = roofMeshes.length ? !roofMeshes[0].visible : false;
+  roofMeshes.forEach(m => m.visible = newVis);
+  if (roofGroup) roofGroup.visible = newVis;
   const btn = document.getElementById('btn-roof');
-  btn.textContent = `Roof: ${roofGroup.visible ? 'ON' : 'OFF'}`;
-  btn.className   = roofGroup.visible ? 'active' : '';
+  btn.textContent = `Roof: ${newVis ? 'ON' : 'OFF'}`;
+  btn.className   = newVis ? 'active' : '';
 };
 
 // ── First-person controls ─────────────────────────────────────────────────────
 const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
 
+controls.getObject().rotation.y = -Math.PI / 2;   // face east toward partition walls
 window.startWalk = () => controls.lock();
 controls.addEventListener('lock',   () => document.getElementById('overlay').style.display = 'none');
 controls.addEventListener('unlock', () => document.getElementById('overlay').style.display = 'flex');
@@ -504,6 +514,7 @@ def _load_markers():
     gnbs     = [swap(p) for p in cfg.get("transmitters", [])]
     ues      = [swap(p) for p in cfg.get("static_receivers", [])]
     ue_types = cfg.get("ue_types", ["unknown"] * len(ues))
+    buildings = cfg.get("buildings", [])
 
     best_gnb = sla_pass = None
     sim_path = "sim_results.json"
@@ -513,12 +524,12 @@ def _load_markers():
         best_gnb = res.get("best_gnb")
         sla_pass = res.get("sla_pass")
 
-    return gnbs, ues, ue_types, best_gnb, sla_pass
+    return gnbs, ues, ue_types, best_gnb, sla_pass, buildings
 
 
 def serve(port=8889):
     export_obj()
-    gnbs, ues, ue_types, best_gnb, sla_pass = _load_markers()
+    gnbs, ues, ue_types, best_gnb, sla_pass, buildings = _load_markers()
     has_sim = best_gnb is not None
 
     html = HTML_TEMPLATE \
@@ -527,6 +538,7 @@ def serve(port=8889):
         .replace("__UE_TYPES__",      json.dumps(ue_types)) \
         .replace("__BEST_GNB__",      json.dumps(best_gnb)) \
         .replace("__SLA_PASS__",      json.dumps(sla_pass)) \
+        .replace("__BUILDINGS__",     json.dumps(buildings)) \
         .replace("__CACHE_BUST__",    str(int(time.time())))
 
     with open(HTML_FILE, "w") as f:

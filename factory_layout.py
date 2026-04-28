@@ -503,6 +503,13 @@ def generate():
         "static_receivers":  UES,
         "ue_types":          UE_TYPES,
         "moving_receivers":  [],
+        "buildings": [
+            {"id": b["id"], "name": b["name"],
+             "x0": b["x0"], "x1": b["x1"],
+             "y0": b["y0"], "y1": b["y1"],
+             "height": b["height"]}
+            for b in BUILDINGS
+        ],
     }
     with open("config.json", "w") as f:
         json.dump(config, f, indent=2)
