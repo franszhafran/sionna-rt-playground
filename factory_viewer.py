@@ -156,7 +156,7 @@ HTML_TEMPLATE = """\
              transform:translateX(-50%); font-size:.85rem; color:#888; }
   #toggles {
     position:absolute; bottom:16px; right:16px;
-    display:flex; gap:8px; z-index:10;
+    display:flex; gap:8px; z-index:25;
   }
   #toggles button {
     padding:6px 14px; font-size:.8rem; font-family:monospace;
@@ -176,6 +176,7 @@ HTML_TEMPLATE = """\
   <p>Mouse &#8212; Look around</p>
   <p>Shift &#8212; Run &nbsp;|&nbsp; Space / C &#8212; Up / Down</p>
   <p>Esc &#8212; Release cursor</p>
+  <p style="margin-top:8px;color:#888;">L &#8212; Toggle lines &nbsp;|&nbsp; R &#8212; Toggle roof</p>
   <button onclick="startWalk()">Enter Factory</button>
 </div>
 <div id="crosshair"></div>
@@ -433,7 +434,11 @@ controls.addEventListener('unlock', () => document.getElementById('overlay').sty
 
 // ── Movement ──────────────────────────────────────────────────────────────────
 const keys = {};
-addEventListener('keydown', e => keys[e.code] = true);
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'KeyL') toggleLines();
+  if (e.code === 'KeyR') toggleRoof();
+});
 addEventListener('keyup',   e => keys[e.code] = false);
 
 const velocity = new THREE.Vector3();
