@@ -208,6 +208,9 @@ HTML_TEMPLATE = """\
 import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
 
 // ── Scene setup ──────────────────────────────────────────────────────────────
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -324,14 +327,15 @@ UE_POSITIONS.forEach(([x, y, z], i) => {
   scene.add(sprite);
 });
 
-// ── UE→gNB connection lines ───────────────────────────────────────────────────
-// Green = SLA pass, Red = SLA fail (or unknown when no sim_results.json)
+// ── UE→gNB connection lines (Line2 for thick rendering) ──────────────────────
+// Green = SLA pass, Red = SLA fail (or yellow when no sim_results.json)
 const lineGroup = new THREE.Group();
-lineGroup.visible = false;   // hidden by default; toggle with button
+lineGroup.visible = false;   // hidden by default; toggle with L key or button
 
-const matPass = new THREE.LineBasicMaterial({ color: 0x00ee88, transparent: true, opacity: 0.55 });
-const matFail = new THREE.LineBasicMaterial({ color: 0xff3333, transparent: true, opacity: 0.55 });
-const matUnkn = new THREE.LineBasicMaterial({ color: 0xffff00, transparent: true, opacity: 0.45 });
+const _lineRes = new THREE.Vector2(innerWidth, innerHeight);
+const matPass = new LineMaterial({ color: 0x00ee88, linewidth: 2.5, transparent: true, opacity: 0.75, resolution: _lineRes });
+const matFail = new LineMaterial({ color: 0xff3333, linewidth: 2.5, transparent: true, opacity: 0.75, resolution: _lineRes });
+const matUnkn = new LineMaterial({ color: 0xffff00, linewidth: 2.5, transparent: true, opacity: 0.65, resolution: _lineRes });
 
 UE_POSITIONS.forEach(([ux, uy, uz], i) => {
   const gnbIdx = (BEST_GNB && BEST_GNB[i] !== undefined) ? BEST_GNB[i] : null;
@@ -339,11 +343,11 @@ UE_POSITIONS.forEach(([ux, uy, uz], i) => {
   const [gx, gy, gz] = GNB_POSITIONS[gnbIdx];
   let mat = matUnkn;
   if (SLA_PASS && SLA_PASS[i] !== undefined) mat = SLA_PASS[i] ? matPass : matFail;
-  const geo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(ux, uy, uz),
-    new THREE.Vector3(gx, gy, gz),
-  ]);
-  lineGroup.add(new THREE.Line(geo, mat));
+  const geo = new LineGeometry();
+  geo.setPositions([ux, uy, uz, gx, gy, gz]);
+  const line = new Line2(geo, mat);
+  line.computeLineDistances();
+  lineGroup.add(line);
 });
 scene.add(lineGroup);
 
@@ -488,6 +492,7 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  [matPass, matFail, matUnkn].forEach(m => m.resolution.set(innerWidth, innerHeight));
 });
 </script>
 </body>
