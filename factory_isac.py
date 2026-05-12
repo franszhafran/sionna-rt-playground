@@ -1,17 +1,21 @@
 """
 Bistatic ISAC sensing — car factory.
 
-Each gNB pair (TX, RX) forms a bistatic link. PathSolver runs once per
-pair with only 1 TX + 1 RX to avoid co-located node issues and limit
-ray-tracing cost. AGV target returns are injected analytically (radar
-equation). CFAR detects targets; grid search localizes AGVs.
+Single PathSolver call (matching factory_sim.py pattern). All gNBs act
+as TX and RX simultaneously. RX nodes are offset 1 cm from TX nodes to
+avoid degenerate zero-delay paths at co-located positions.
+
+Clutter: Sionna RT ray tracing (walls, floor reflections).
+Targets:  AGV returns injected analytically via radar equation.
+Detection: 1D CA-CFAR per bistatic pair.
+Localization: grid-search on bistatic range-sum ellipses.
 
 Outputs: isac_results.json
 """
 
 import json
 import gc
-import inspect
+import time
 import numpy as np
 import torch
 import sionna.rt.scene as scenes
@@ -27,71 +31,60 @@ NUM_ACTIVE_SC      = NUM_RBS * SUBCARRIERS_PER_RB   # 612
 _half              = NUM_ACTIVE_SC // 2
 SC_FREQ_OFFSETS    = np.concatenate(
     [np.arange(-_half, 0), np.arange(1, _half + 1)]
-).astype(np.float64) * SUBCARRIER_SPACING           # baseband offsets [SC]
+).astype(np.float64) * SUBCARRIER_SPACING
 
 C   = 3e8
 BW  = NUM_ACTIVE_SC * SUBCARRIER_SPACING            # ≈ 18.36 MHz
-# IFFT bin n → excess bistatic range sum R = n * C / BW
 RANGE_SUM_PER_BIN = C / BW                          # ≈ 16.3 m / bin
 
-# ── Bistatic pair definitions ──────────────────────────────────────────────────
-# Only pairs within the same building zone — cross-building wall attenuation
-# makes inter-building pairs useless for sensing targets inside a building.
+# ── Bistatic pairs (same-building only) ───────────────────────────────────────
 BISTATIC_PAIRS = [
-    # Stamping Plant (gNB 0–1)
-    (0, 1),
-    # Body Shop (gNB 2–4)
-    (2, 3), (3, 4), (2, 4),
-    # Paint Shop (gNB 5–6)
-    (5, 6),
-    # General Assembly (gNB 7–10)
-    (7, 8), (8, 9), (9, 10), (7, 9), (8, 10), (7, 10),
+    (0, 1),                           # Stamping Plant
+    (2, 3), (3, 4), (2, 4),           # Body Shop
+    (5, 6),                           # Paint Shop
+    (7, 8), (8, 9), (9, 10),          # General Assembly
+    (7, 9), (8, 10), (7, 10),
 ]
 
-# ── Sensing helpers ────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def cfr_from_paths(paths):
-    """Extract CFR: [1, rx_ant, 1, tx_ant, NUM_SC] complex64 (single TX-RX pair)."""
+    """[num_gnbs, rx_ant, num_gnbs, tx_ant, SC] complex64."""
     cfr = paths.cfr(
         frequencies=SC_FREQ_OFFSETS.astype(np.float32),
         out_type="drjit",
     )
     H = (np.array(cfr[0]) + 1j * np.array(cfr[1])).astype(np.complex64)
-    return H[..., 0, :]   # drop time-step dim → [1, rx_ant, 1, tx_ant, SC]
+    return H[..., 0, :]   # drop time dim
 
 
-def pair_channel_scalar(H):
-    """Average over antenna dims → scalar channel [NUM_SC]."""
-    return H[0, :, 0, :, :].mean(axis=(0, 1))   # [SC]
+def pair_channel(H_full, tx_i, rx_i):
+    """Antenna-averaged scalar channel [SC] for one bistatic pair."""
+    return H_full[rx_i, :, tx_i, :, :].mean(axis=(0, 1))
 
 
-def inject_target(h_clutter, tx_pos, rx_pos, tgt_pos, fc, rcs_m2):
+def inject_target(h_clut, tx_pos, rx_pos, tgt_pos, fc, rcs_m2):
     """
-    Add a point-target return on top of the clutter channel.
-
-    Uses excess delay τ_excess = τ_bistatic − τ_direct to match Sionna's
-    normalize_delays=True convention (direct path at bin 0).
-
-    amplitude = sqrt(rcs) / (4π · d_tx · d_rx)
-    phase     = −2π · (fc + Δf_k) · τ_excess
+    Add point-target return onto clutter channel.
+    Uses excess delay (τ_bistatic − τ_direct) matching Sionna normalize_delays=True.
     """
     tx = np.array(tx_pos, np.float64)
     rx = np.array(rx_pos, np.float64)
     tp = np.array(tgt_pos, np.float64)
 
-    d_tx     = np.linalg.norm(tp - tx)
-    d_rx     = np.linalg.norm(tp - rx)
-    d_direct = np.linalg.norm(rx - tx)
-    tau_exc  = (d_tx + d_rx - d_direct) / C
+    d_tx    = np.linalg.norm(tp - tx)
+    d_rx    = np.linalg.norm(tp - rx)
+    d_dir   = np.linalg.norm(rx - tx)
+    tau_exc = (d_tx + d_rx - d_dir) / C
 
     amp   = np.sqrt(rcs_m2) / (4 * np.pi * d_tx * d_rx)
     freqs = fc + SC_FREQ_OFFSETS
     h_tgt = (amp * np.exp(-2j * np.pi * freqs * tau_exc)).astype(np.complex64)
-    return h_clutter + h_tgt
+    return h_clut + h_tgt
 
 
 def cfar_ca_1d(rp_lin, guard=3, ref=10, pfa=1e-4):
-    """Cell-averaging CFAR on linear-scale range profile. Returns peak bin list."""
+    """Cell-averaging CFAR. Returns list of detected bin indices."""
     eta = ref * (pfa ** (-1.0 / ref) - 1.0)
     n   = len(rp_lin)
     det = []
@@ -104,67 +97,35 @@ def cfar_ca_1d(rp_lin, guard=3, ref=10, pfa=1e-4):
     return det
 
 
-def bistatic_range_sum(tx_pos, rx_pos, tgt_pos):
-    tx = np.array(tx_pos); rx = np.array(rx_pos); tp = np.array(tgt_pos)
-    return float(np.linalg.norm(tp - tx) + np.linalg.norm(tp - rx))
-
-
-def direct_range(tx_pos, rx_pos):
-    return float(np.linalg.norm(np.array(rx_pos) - np.array(tx_pos)))
-
-
-def grid_localize(gnb_positions, range_sum_constraints, res=5.0):
+def grid_localize(gnb_positions, constraints, res=5.0):
     """
-    Grid-search localization. Minimises Σ(R_pred − R_meas)² over factory floor.
-    range_sum_constraints: list of (tx_i, rx_i, R_meas) where R_meas = d_tx + d_rx.
-    Returns (est_xyz, rms_residual_m).
+    Least-squares grid search over factory floor.
+    constraints: list of (tx_i, rx_i, R_meas) where R_meas = d_tx + d_rx in m.
+    Returns (est_xyz, rms_m).
     """
     xs = np.arange(0.0, 251.0, res)
     ys = np.arange(0.0, 161.0, res)
-    z  = 1.5   # AGVs at floor level
-
     XX, YY = np.meshgrid(xs, ys)
-    cost   = np.zeros_like(XX, dtype=np.float64)
+    cost   = np.zeros_like(XX, np.float64)
 
-    for tx_i, rx_i, R_meas in range_sum_constraints:
+    for tx_i, rx_i, R_meas in constraints:
         tx  = np.array(gnb_positions[tx_i], np.float64)
         rx  = np.array(gnb_positions[rx_i], np.float64)
-        pts = np.stack([XX, YY, np.full_like(XX, z)], axis=-1)
-        R_pred = (np.linalg.norm(pts - tx, axis=-1) +
-                  np.linalg.norm(pts - rx, axis=-1))
-        cost += (R_pred - R_meas) ** 2
+        pts = np.stack([XX, YY, np.full_like(XX, 1.5)], axis=-1)
+        R_p = np.linalg.norm(pts - tx, axis=-1) + np.linalg.norm(pts - rx, axis=-1)
+        cost += (R_p - R_meas) ** 2
 
     ij  = np.unravel_index(np.argmin(cost), cost.shape)
-    est = [float(xs[ij[1]]), float(ys[ij[0]]), z]
-    rms = float(np.sqrt(cost[ij] / len(range_sum_constraints)))
+    est = [float(xs[ij[1]]), float(ys[ij[0]]), 1.5]
+    rms = float(np.sqrt(cost[ij] / max(len(constraints), 1)))
     return est, rms
-
-
-def make_fresh_scene(scene_ref, fc, tx_pos, rx_pos, gnb_array):
-    """Load a fresh scene instance with a single TX-RX pair."""
-    scene = (load_scene(scene_ref) if "/" in scene_ref or scene_ref.endswith(".xml")
-             else load_scene(getattr(scenes, scene_ref)))
-    scene.frequency = fc
-    scene.tx_array  = gnb_array
-    scene.rx_array  = gnb_array
-    scene.add(Transmitter(name="tx", position=tx_pos))
-    scene.add(Receiver(name="rx",   position=rx_pos))
-    return scene
-
-
-def call_path_solver(scene, max_depth):
-    """Call PathSolver with num_samples if the API supports it."""
-    ps  = PathSolver()
-    sig = inspect.signature(ps.__call__)
-    if "num_samples" in sig.parameters:
-        return ps(scene, max_depth=max_depth, num_samples=int(1e5))
-    return ps(scene, max_depth=max_depth)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     print("=== Bistatic ISAC Sensing ===\n")
+    t0 = time.time()
 
     config = load_config("config.json")
     with open("config.json") as f:
@@ -174,7 +135,7 @@ def main():
     ue_positions  = config.static_receivers
     gnb_positions = config.transmitters
     fc            = config.frequency
-    SENSING_DEPTH = 2   # depth=2 sufficient for 1-bounce target returns
+    SENSING_DEPTH = 2   # depth 2: direct + 1-bounce sufficient for target returns
 
     agv_indices   = [i for i, t in enumerate(ue_types) if t == "agv"]
     agv_positions = [ue_positions[i] for i in agv_indices]
@@ -184,64 +145,83 @@ def main():
     print(f"AGV targets     : {len(agv_positions)}")
     print(f"Bistatic pairs  : {len(BISTATIC_PAIRS)}")
     print(f"Ray depth       : {SENSING_DEPTH}")
-    print(f"Range res (bin) : {RANGE_SUM_PER_BIN:.2f} m (bistatic range sum/bin)")
+    print(f"Range res/bin   : {RANGE_SUM_PER_BIN:.2f} m")
     print(f"Max range sum   : {C/SUBCARRIER_SPACING:.0f} m\n")
+
+    # ── Load scene once ────────────────────────────────────────────────────────
+    scene_ref = config.scene
+    print(f"Loading scene: {scene_ref} ...", flush=True)
+    scene = (load_scene(scene_ref) if "/" in scene_ref or scene_ref.endswith(".xml")
+             else load_scene(getattr(scenes, scene_ref)))
+    scene.frequency = fc
+    print(f"  Scene loaded in {time.time()-t0:.1f}s\n")
 
     gnb_array = PlanarArray(
         num_rows=config.tx_array.rows, num_cols=config.tx_array.cols,
         vertical_spacing=config.tx_array.spacing,
         horizontal_spacing=config.tx_array.spacing,
         pattern="iso", polarization="V")
+    scene.tx_array = gnb_array
+    scene.rx_array = gnb_array
 
-    AGV_RCS_M2 = 3.0   # ~3 m² for 1.5m×2m metal AGV body at 3.8 GHz
+    # Add all gNBs as TX; RX offset 1 cm to avoid degenerate zero-delay paths
+    RX_OFFSET = 0.01   # metres
+    for i, pos in enumerate(gnb_positions):
+        scene.add(Transmitter(name=f"gnb_tx_{i}", position=pos))
+    for i, pos in enumerate(gnb_positions):
+        scene.add(Receiver(name=f"gnb_rx_{i}",
+                           position=[pos[0] + RX_OFFSET, pos[1], pos[2]]))
 
-    # agv_constraints[k] = list of (tx_i, rx_i, R_meas) matched by CFAR
+    # ── Single PathSolver call ─────────────────────────────────────────────────
+    print(f"PathSolver (max_depth={SENSING_DEPTH}, all {len(gnb_positions)} TX×RX pairs)...", flush=True)
+    t1 = time.time()
+    paths  = PathSolver()(scene, max_depth=SENSING_DEPTH)
+    H_full = cfr_from_paths(paths)
+    print(f"  PathSolver done in {time.time()-t1:.1f}s")
+    print(f"  CFR shape: {H_full.shape}\n")
+
+    del paths
+    gc.collect()
+
+    # ── Per-pair CFAR detection ────────────────────────────────────────────────
+    AGV_RCS_M2      = 3.0   # ~3 m² for 1.5m×2m metal AGV at 3.8 GHz
     agv_constraints = [[] for _ in agv_positions]
     pair_results    = []
 
-    print("Processing bistatic pairs (1 PathSolver call per pair):")
-    for pair_idx, (tx_i, rx_i) in enumerate(BISTATIC_PAIRS):
-        print(f"\n  [{pair_idx+1}/{len(BISTATIC_PAIRS)}] gNB-{tx_i} → gNB-{rx_i} ...", flush=True)
-
-        scene  = make_fresh_scene(config.scene, fc,
-                                  gnb_positions[tx_i], gnb_positions[rx_i],
-                                  gnb_array)
-        paths  = call_path_solver(scene, SENSING_DEPTH)
-        H      = cfr_from_paths(paths)
-        h_clut = pair_channel_scalar(H)
-        print(f"    CFR shape: {H.shape}  clutter energy: {np.abs(h_clut).mean():.4e}")
-
-        del paths, scene
-        gc.collect()
+    print("Per-pair detection:")
+    for tx_i, rx_i in BISTATIC_PAIRS:
+        h_clut = pair_channel(H_full, tx_i, rx_i)
 
         detected = 0
         for k, agv_pos in enumerate(agv_positions):
-            h_total = inject_target(h_clut, gnb_positions[tx_i], gnb_positions[rx_i],
+            h_tot   = inject_target(h_clut,
+                                    gnb_positions[tx_i], gnb_positions[rx_i],
                                     agv_pos, fc, rcs_m2=AGV_RCS_M2)
-            rp_lin  = np.abs(np.fft.ifft(h_total)) ** 2
+            rp_lin  = np.abs(np.fft.ifft(h_tot)) ** 2
             peaks   = cfar_ca_1d(rp_lin)
 
-            R_bistatic = bistatic_range_sum(gnb_positions[tx_i], gnb_positions[rx_i], agv_pos)
-            R_direct   = direct_range(gnb_positions[tx_i], gnb_positions[rx_i])
-            R_excess   = R_bistatic - R_direct
-            bin_theory = R_excess / RANGE_SUM_PER_BIN
+            R_bi  = (np.linalg.norm(np.array(agv_pos) - np.array(gnb_positions[tx_i]))
+                   + np.linalg.norm(np.array(agv_pos) - np.array(gnb_positions[rx_i])))
+            R_dir = np.linalg.norm(np.array(gnb_positions[rx_i])
+                                 - np.array(gnb_positions[tx_i]))
+            bin_th = (R_bi - R_dir) / RANGE_SUM_PER_BIN
 
             for pk in peaks:
-                if abs(pk - bin_theory) <= 2.0:
-                    agv_constraints[k].append((tx_i, rx_i, R_bistatic))
+                if abs(pk - bin_th) <= 2.0:
+                    agv_constraints[k].append((tx_i, rx_i, R_bi))
                     detected += 1
                     break
 
         pct = 100 * detected / max(len(agv_positions), 1)
-        print(f"    AGVs detected: {detected}/{len(agv_positions)}  ({pct:.0f}%)")
+        print(f"  gNB-{tx_i}→gNB-{rx_i}: {detected}/{len(agv_positions)} AGVs  ({pct:.0f}%)")
         pair_results.append({"tx": tx_i, "rx": rx_i,
                               "agv_detections": detected,
                               "total_agvs": len(agv_positions)})
 
     # ── Localization ───────────────────────────────────────────────────────────
-    print("\n\n=== AGV Localization (grid search, 5m resolution) ===\n")
-    print(f"  {'UE':>4}  {'True pos (x,y)':>20}  {'Est pos (x,y)':>20}  {'Err(m)':>7}  {'Pairs':>5}")
-    print("  " + "─" * 64)
+    print("\n=== AGV Localization (5m grid) ===\n")
+    print(f"  {'UE':>4}  {'True(x,y)':>18}  {'Est(x,y)':>18}  {'Err(m)':>7}  {'Pairs':>5}")
+    print("  " + "─" * 60)
 
     loc_results = []
     for k, agv_pos in enumerate(agv_positions):
@@ -252,16 +232,16 @@ def main():
         else:
             est, err = None, float("nan")
 
-        true_s = f"({agv_pos[0]:.1f},{agv_pos[1]:.1f})"
-        est_s  = f"({est[0]:.1f},{est[1]:.1f})" if est else "N/A"
-        err_s  = f"{err:.1f}" if not np.isnan(err) else "—"
-        print(f"  UE-{agv_indices[k]:<3}  {true_s:>20}  {est_s:>20}  {err_s:>7}  {len(c):>5}")
+        ts = f"({agv_pos[0]:.1f},{agv_pos[1]:.1f})"
+        es = f"({est[0]:.1f},{est[1]:.1f})" if est else "N/A"
+        er = f"{err:.1f}" if not np.isnan(err) else "—"
+        print(f"  UE-{agv_indices[k]:<3}  {ts:>18}  {es:>18}  {er:>7}  {len(c):>5}")
 
         loc_results.append({
-            "ue_idx":   agv_indices[k],
-            "true_pos": agv_pos,
-            "est_pos":  est,
-            "error_m":  round(err, 2) if not np.isnan(err) else None,
+            "ue_idx":    agv_indices[k],
+            "true_pos":  agv_pos,
+            "est_pos":   est,
+            "error_m":   round(err, 2) if not np.isnan(err) else None,
             "num_pairs": len(c),
         })
 
@@ -269,9 +249,10 @@ def main():
     n_loc  = sum(1 for r in loc_results if r["est_pos"] is not None)
     errors = [r["error_m"] for r in loc_results if r["error_m"] is not None]
 
-    print(f"\n{'='*50}")
+    print(f"\n{'='*52}")
     print("ISAC SUMMARY")
-    print(f"{'='*50}")
+    print(f"{'='*52}")
+    print(f"  Total runtime        : {time.time()-t0:.1f}s")
     print(f"  AGV targets          : {len(agv_positions)}")
     print(f"  Localized (≥2 pairs) : {n_loc}  ({100*n_loc/max(len(agv_positions),1):.1f}%)")
     if errors:
@@ -280,23 +261,23 @@ def main():
         print(f"  Max loc error        : {np.max(errors):.1f} m")
         print(f"  <10 m accuracy       : {sum(e<10 for e in errors)}/{len(errors)}")
         print(f"  <20 m accuracy       : {sum(e<20 for e in errors)}/{len(errors)}")
-    print(f"\n  Range res            : {RANGE_SUM_PER_BIN:.1f} m/bin at {BW/1e6:.1f} MHz BW")
-    print(f"  Grid search res      : 5.0 m")
+    print(f"  Range res            : {RANGE_SUM_PER_BIN:.1f} m/bin")
 
     out = {
-        "frequency_ghz":        fc / 1e9,
-        "bandwidth_mhz":        round(BW / 1e6, 2),
-        "range_sum_per_bin_m":  round(RANGE_SUM_PER_BIN, 2),
-        "agv_rcs_m2":           AGV_RCS_M2,
-        "sensing_max_depth":    SENSING_DEPTH,
-        "bistatic_pairs":       [list(p) for p in BISTATIC_PAIRS],
-        "pair_results":         pair_results,
-        "agv_localization":     loc_results,
-        "n_agv_targets":        len(agv_positions),
-        "n_localized":          n_loc,
-        "localization_pct":     round(100 * n_loc / max(len(agv_positions), 1), 1),
-        "mean_error_m":         round(float(np.mean(errors)), 2) if errors else None,
-        "median_error_m":       round(float(np.median(errors)), 2) if errors else None,
+        "frequency_ghz":       fc / 1e9,
+        "bandwidth_mhz":       round(BW / 1e6, 2),
+        "range_sum_per_bin_m": round(RANGE_SUM_PER_BIN, 2),
+        "agv_rcs_m2":          AGV_RCS_M2,
+        "sensing_max_depth":   SENSING_DEPTH,
+        "bistatic_pairs":      [list(p) for p in BISTATIC_PAIRS],
+        "pair_results":        pair_results,
+        "agv_localization":    loc_results,
+        "n_agv_targets":       len(agv_positions),
+        "n_localized":         n_loc,
+        "localization_pct":    round(100 * n_loc / max(len(agv_positions), 1), 1),
+        "mean_error_m":        round(float(np.mean(errors)), 2) if errors else None,
+        "median_error_m":      round(float(np.median(errors)), 2) if errors else None,
+        "total_runtime_s":     round(time.time() - t0, 1),
     }
     with open("isac_results.json", "w") as f:
         json.dump(out, f, indent=2)
