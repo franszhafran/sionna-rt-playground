@@ -39,11 +39,11 @@ RANGE_SUM_PER_BIN = C / BW                          # ≈ 16.3 m / bin
 
 # ── Bistatic pairs (same-building only) ───────────────────────────────────────
 BISTATIC_PAIRS = [
-    (0, 1),                           # Stamping Plant
-    (2, 3), (3, 4), (2, 4),           # Body Shop
-    (5, 6),                           # Paint Shop
-    (7, 8), (8, 9), (9, 10),          # General Assembly
-    (7, 9), (8, 10), (7, 10),
+    (0, 1), (1, 0),                                     # Stamping Plant
+    (2, 3), (3, 2), (3, 4), (4, 3), (2, 4), (4, 2),    # Body Shop (both directions)
+    (5, 6), (6, 5),                                     # Paint Shop
+    (7, 8), (8, 7), (8, 9), (9, 8), (9, 10), (10, 9),  # General Assembly
+    (7, 9), (9, 7), (8, 10), (10, 8), (7, 10), (10, 7),
 ]
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -83,7 +83,7 @@ def inject_target(h_clut, tx_pos, rx_pos, tgt_pos, fc, rcs_m2):
     return h_clut + h_tgt
 
 
-def cfar_ca_1d(rp_lin, guard=3, ref=10, pfa=1e-4):
+def cfar_ca_1d(rp_lin, guard=2, ref=8, pfa=1e-3):
     """Cell-averaging CFAR. Returns list of detected bin indices."""
     eta = ref * (pfa ** (-1.0 / ref) - 1.0)
     n   = len(rp_lin)
@@ -184,7 +184,7 @@ def main():
     gc.collect()
 
     # ── Per-pair CFAR detection ────────────────────────────────────────────────
-    AGV_RCS_M2      = 3.0   # ~3 m² for 1.5m×2m metal AGV at 3.8 GHz
+    AGV_RCS_M2      = 10.0  # 10 m² — large metal factory AGV body, conservative upper bound
     agv_constraints = [[] for _ in agv_positions]
     pair_results    = []
 
@@ -268,6 +268,7 @@ def main():
         "bandwidth_mhz":       round(BW / 1e6, 2),
         "range_sum_per_bin_m": round(RANGE_SUM_PER_BIN, 2),
         "agv_rcs_m2":          AGV_RCS_M2,
+        "cfar_pfa":            1e-3,
         "sensing_max_depth":   SENSING_DEPTH,
         "bistatic_pairs":      [list(p) for p in BISTATIC_PAIRS],
         "pair_results":        pair_results,
