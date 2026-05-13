@@ -226,7 +226,7 @@ def main():
     loc_results = []
     for k, agv_pos in enumerate(agv_positions):
         c = agv_constraints[k]
-        if len(c) >= 2:
+        if len(c) >= 3:
             est, _ = grid_localize(gnb_positions, c, res=5.0)
             err    = float(np.linalg.norm(np.array(agv_pos[:2]) - np.array(est[:2])))
         else:

@@ -192,6 +192,7 @@ HTML_TEMPLATE = """\
 <div id="toggles">
   <button id="btn-lines" onclick="toggleLines()">Lines: OFF</button>
   <button id="btn-roof"  onclick="toggleRoof()"  class="active">Roof: ON</button>
+  <button id="btn-isac"  onclick="toggleISAC()">ISAC: OFF</button>
 </div>
 <div id="loading">Loading geometry&#8230;</div>
 
@@ -243,13 +244,14 @@ scene.add(sun);
 });
 
 // ── gNB / UE data (injected from Python) ─────────────────────────────────────
-const GNB_POSITIONS = __GNB_POSITIONS__;
-const UE_POSITIONS  = __UE_POSITIONS__;
-const UE_TYPES      = __UE_TYPES__;
-const BEST_GNB      = __BEST_GNB__;
-const SLA_PASS      = __SLA_PASS__;
-const BUILDINGS     = __BUILDINGS__;
-const V             = '__CACHE_BUST__';   // cache-bust version injected by Python
+const GNB_POSITIONS  = __GNB_POSITIONS__;
+const UE_POSITIONS   = __UE_POSITIONS__;
+const UE_TYPES       = __UE_TYPES__;
+const BEST_GNB       = __BEST_GNB__;
+const SLA_PASS       = __SLA_PASS__;
+const BUILDINGS      = __BUILDINGS__;
+const ISAC_RESULTS   = __ISAC_RESULTS__;   // [{ue_idx, true_pos, est_pos, error_m, num_pairs}]
+const V              = '__CACHE_BUST__';   // cache-bust version injected by Python
 
 const UE_TYPE_COLOR = {
   agv:           0xff4444,
@@ -358,6 +360,59 @@ window.toggleLines = () => {
   btn.className   = lineGroup.visible ? 'active' : '';
 };
 
+// ── ISAC estimated AGV positions ──────────────────────────────────────────────
+// Cyan octahedra at estimated positions; dashed error line to true position.
+const isacGroup = new THREE.Group();
+isacGroup.visible = false;
+
+const isacGeo  = new THREE.OctahedronGeometry(0.5, 0);
+const isacMat  = new THREE.MeshLambertMaterial({ color: 0x00ffee, emissive: 0x004444 });
+const errMat   = new LineMaterial({ color: 0x00ffee, linewidth: 1.5, transparent: true, opacity: 0.5, resolution: _lineRes });
+
+(ISAC_RESULTS || []).forEach(r => {
+  if (!r.est_pos) return;
+  // Three.js y-up: [x, z_height, y_factory]
+  const [ex, ez, ey] = [r.est_pos[0], r.est_pos[2], r.est_pos[1]];
+  const [tx, tz, ty] = [r.true_pos[0], r.true_pos[2], r.true_pos[1]];
+
+  const mesh = new THREE.Mesh(isacGeo, isacMat.clone());
+  mesh.position.set(ex, ez, ey);
+  isacGroup.add(mesh);
+
+  // Label: "~Xm" error
+  const canvas = document.createElement('canvas');
+  canvas.width = 120; canvas.height = 36;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(0,60,60,0.75)';
+  ctx.roundRect(2, 2, 116, 32, 5); ctx.fill();
+  ctx.fillStyle = '#00ffee';
+  ctx.font = 'bold 15px monospace';
+  ctx.textAlign = 'center';
+  const errTxt = r.error_m !== null ? `~${r.error_m.toFixed(1)}m` : 'est';
+  ctx.fillText(errTxt, 60, 23);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas), depthTest: false
+  }));
+  sprite.scale.set(2.5, 0.75, 1);
+  sprite.position.set(ex, ez + 1.2, ey);
+  isacGroup.add(sprite);
+
+  // Error line: estimated → true
+  const errGeo = new LineGeometry();
+  errGeo.setPositions([ex, ez, ey, tx, tz, ty]);
+  const errLine = new Line2(errGeo, errMat);
+  errLine.computeLineDistances();
+  isacGroup.add(errLine);
+});
+scene.add(isacGroup);
+
+window.toggleISAC = () => {
+  isacGroup.visible = !isacGroup.visible;
+  const btn = document.getElementById('btn-isac');
+  btn.textContent = `ISAC: ${isacGroup.visible ? 'ON' : 'OFF'}`;
+  btn.className   = isacGroup.visible ? 'active' : '';
+};
+
 // ── Load main OBJ geometry ────────────────────────────────────────────────────
 const wallMat = new THREE.MeshLambertMaterial({ color: 0xc8c0b0, side: THREE.DoubleSide });
 
@@ -442,6 +497,7 @@ addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'KeyL') toggleLines();
   if (e.code === 'KeyR') toggleRoof();
+  if (e.code === 'KeyI') toggleISAC();
 });
 addEventListener('keyup',   e => keys[e.code] = false);
 
@@ -534,13 +590,33 @@ def _load_markers():
         best_gnb = res.get("best_gnb")
         sla_pass = res.get("sla_pass")
 
-    return gnbs, ues, ue_types, best_gnb, sla_pass, buildings
+    isac_results = None
+    isac_path = "isac_results.json"
+    if os.path.exists(isac_path):
+        with open(isac_path) as f:
+            ir = json.load(f)
+        # Convert factory coords → Three.js y-up for both true_pos and est_pos
+        locs = []
+        for r in ir.get("agv_localization", []):
+            tp = r["true_pos"]
+            ep = r["est_pos"]
+            locs.append({
+                "ue_idx":   r["ue_idx"],
+                "true_pos": [tp[0], tp[2], tp[1]],
+                "est_pos":  [ep[0], ep[2], ep[1]] if ep else None,
+                "error_m":  r["error_m"],
+                "num_pairs": r["num_pairs"],
+            })
+        isac_results = locs
+
+    return gnbs, ues, ue_types, best_gnb, sla_pass, buildings, isac_results
 
 
 def serve(port=8889):
     export_obj()
-    gnbs, ues, ue_types, best_gnb, sla_pass, buildings = _load_markers()
-    has_sim = best_gnb is not None
+    gnbs, ues, ue_types, best_gnb, sla_pass, buildings, isac_results = _load_markers()
+    has_sim  = best_gnb is not None
+    has_isac = isac_results is not None
 
     html = HTML_TEMPLATE \
         .replace("__GNB_POSITIONS__", json.dumps(gnbs)) \
@@ -549,6 +625,7 @@ def serve(port=8889):
         .replace("__BEST_GNB__",      json.dumps(best_gnb)) \
         .replace("__SLA_PASS__",      json.dumps(sla_pass)) \
         .replace("__BUILDINGS__",     json.dumps(buildings)) \
+        .replace("__ISAC_RESULTS__",  json.dumps(isac_results)) \
         .replace("__CACHE_BUST__",    str(int(time.time())))
 
     with open(HTML_FILE, "w") as f:
@@ -559,13 +636,15 @@ def serve(port=8889):
     print(f"  Open in browser : http://localhost:{port}/")
     print(f"  gNBs            : {len(gnbs)}  |  UEs : {len(ues)}")
     print(f"  Sim results     : {'loaded (lines available)' if has_sim else 'not found — run factory_sim.py first'}")
+    print(f"  ISAC results    : {'loaded (I key or button to toggle)' if has_isac else 'not found — run factory_isac.py first'}")
     print(f"\n  Controls:")
     print(f"    WASD / Arrows — move    Shift — run")
     print(f"    Mouse — look            Space/C — up/down")
     print(f"    Esc — release cursor")
     print(f"\n  Toggles (buttons bottom-right):")
-    print(f"    Lines — UE→best-gNB connections (green=pass, red=fail)")
-    print(f"    Roof  — show/hide building roofs")
+    print(f"    Lines — UE→best-gNB connections (green=pass, red=fail)  [L]")
+    print(f"    Roof  — show/hide building roofs                        [R]")
+    print(f"    ISAC  — estimated AGV positions (cyan) + error lines    [I]")
     print(f"\nPress Ctrl+C to stop.\n")
 
     with socketserver.TCPServer(("", port), _Handler) as httpd:
