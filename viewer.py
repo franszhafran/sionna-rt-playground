@@ -262,68 +262,7 @@ for (const obj of (LAYOUT.objects || [])) {
   }
 }
 
-// ── ISAC overlay ──────────────────────────────────────────────────────────────
-function textSprite(text) {
-  const cvs = document.createElement('canvas');
-  cvs.width = 140; cvs.height = 50;
-  const ctx = cvs.getContext('2d');
-  ctx.fillStyle = 'rgba(0,16,24,0.75)';
-  ctx.roundRect(2, 2, 136, 46, 6);
-  ctx.fill();
-  ctx.fillStyle = '#00ddff';
-  ctx.font = 'bold 22px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, 70, 26);
-  const tex = new THREE.CanvasTexture(cvs);
-  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
-  spr.scale.set(3.5, 1.3, 1);
-  return spr;
-}
-
-if (ISAC && ISAC.ue_localization) {
-  const estGeo = new THREE.OctahedronGeometry(0.6);
-  const LIFT = 2.5;  // raise ISAC markers above UEs so they're visible even at 0 error
-  for (const loc of ISAC.ue_localization) {
-    if (!loc.est_pos) continue;
-    const [ex, ey, ez] = loc.est_pos;
-    const [tx, ty, tz] = loc.true_pos;
-
-    // Cyan octahedron raised above estimated position
-    const estMesh = new THREE.Mesh(estGeo, matEst);
-    estMesh.position.copy(f2t(ex, ey, ez + LIFT));
-    gISAC.add(estMesh);
-
-    // Drop line from raised marker down to true position
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([
-      f2t(tx, ty, tz), f2t(ex, ey, ez + LIFT)
-    ]);
-    gISAC.add(new THREE.Line(lineGeo, matLine));
-
-    // Label above marker
-    const errText = loc.error_m != null ? `${loc.error_m.toFixed(2)}m` : '?';
-    const spr = textSprite(`UE-${loc.ue_idx} ${errText}`);
-    spr.position.copy(f2t(ex, ey, ez + LIFT + 1.4));
-    gISAC.add(spr);
-  }
-}
-
-// ── Info panel ─────────────────────────────────────────────────────────────────
-{
-  const el = document.getElementById('info');
-  let s = `${UEGNB.gnbs.length} gNBs &nbsp;·&nbsp; ${UEGNB.ues.length} UEs`
-        + ` &nbsp;·&nbsp; <b>${UEGNB.frequency_ghz} GHz</b> / ${UEGNB.bandwidth_mhz} MHz`;
-  if (ISAC) {
-    const n = ISAC.ue_localization.filter(r => r.est_pos).length;
-    const e = ISAC.mean_error_m != null ? ` &nbsp;·&nbsp; mean err <b>${ISAC.mean_error_m} m</b>` : '';
-    s += `<br>ISAC: <b>${n}/${ISAC.n_ues}</b> localized${e}`;
-  } else {
-    s += `<br>ISAC: no results yet — run sionna.py first`;
-  }
-  el.innerHTML = s;
-}
-
-// ── Toggles ────────────────────────────────────────────────────────────────────
+// ── Toggles — defined FIRST so errors below can't prevent assignment ──────────
 const state = { factory: true, roof: false, isac: false };
 
 function toggle(which) {
@@ -335,6 +274,64 @@ function toggle(which) {
   if (which === 'isac')    gISAC.visible    = state.isac;
 }
 window.toggle = toggle;  // expose for onclick= attributes in HTML
+
+// ── Info panel ─────────────────────────────────────────────────────────────────
+{
+  const el = document.getElementById('info');
+  let s = `${UEGNB.gnbs.length} gNBs &nbsp;·&nbsp; ${UEGNB.ues.length} UEs`
+        + ` &nbsp;·&nbsp; <b>${UEGNB.frequency_ghz} GHz</b> / ${UEGNB.bandwidth_mhz} MHz`;
+  if (ISAC) {
+    const n = ISAC.ue_localization.filter(r => r.est_pos).length;
+    const e = ISAC.mean_error_m != null ? ` &nbsp;·&nbsp; mean err <b>${ISAC.mean_error_m} m</b>` : '';
+    s += `<br>ISAC: <b>${n}/${ISAC.n_ues}</b> localized${e}`;
+  } else {
+    s += `<br>ISAC: no results yet — run sim.py first`;
+  }
+  el.innerHTML = s;
+}
+
+// ── ISAC overlay ──────────────────────────────────────────────────────────────
+function textSprite(text) {
+  const cvs = document.createElement('canvas');
+  cvs.width = 160; cvs.height = 52;
+  const ctx = cvs.getContext('2d');
+  ctx.fillStyle = 'rgba(0,20,30,0.82)';
+  ctx.fillRect(0, 0, 160, 52);   // fillRect — universally supported, no roundRect
+  ctx.fillStyle = '#00eeff';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 80, 28);
+  const tex = new THREE.CanvasTexture(cvs);
+  const spr = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
+  spr.scale.set(4, 1.4, 1);
+  return spr;
+}
+
+if (ISAC && ISAC.ue_localization) {
+  const estGeo = new THREE.OctahedronGeometry(0.65);
+  const LIFT = 2.8;
+  for (const loc of ISAC.ue_localization) {
+    if (!loc.est_pos) continue;
+    const [ex, ey, ez] = loc.est_pos;
+    const [tx, ty, tz] = loc.true_pos;
+
+    const estMesh = new THREE.Mesh(estGeo, matEst);
+    estMesh.position.copy(f2t(ex, ey, ez + LIFT));
+    gISAC.add(estMesh);
+
+    // Drop line from lifted marker to true UE position
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      f2t(tx, ty, tz), f2t(ex, ey, ez + LIFT)
+    ]);
+    gISAC.add(new THREE.Line(lineGeo, matLine));
+
+    const errText = loc.error_m != null ? `UE-${loc.ue_idx}  ${loc.error_m.toFixed(2)}m` : `UE-${loc.ue_idx} ?`;
+    const spr = textSprite(errText);
+    spr.position.copy(f2t(ex, ey, ez + LIFT + 1.6));
+    gISAC.add(spr);
+  }
+}
 
 document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
