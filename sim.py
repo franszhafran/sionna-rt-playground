@@ -231,7 +231,6 @@ def grid_localize(gnb_pos, constraints, x_max, y_max, res=0.5):
 
 
 def run_isac(scene_xml, layout, uegnb):
-    import sionna.rt.scene as scenes
     from sionna.rt import load_scene, PlanarArray, Transmitter, Receiver, PathSolver
 
     fc        = uegnb["frequency_ghz"] * 1e9
