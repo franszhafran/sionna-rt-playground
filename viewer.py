@@ -282,24 +282,29 @@ function textSprite(text) {
 }
 
 if (ISAC && ISAC.ue_localization) {
-  const estGeo = new THREE.OctahedronGeometry(0.5);
+  const estGeo = new THREE.OctahedronGeometry(0.6);
+  const LIFT = 2.5;  // raise ISAC markers above UEs so they're visible even at 0 error
   for (const loc of ISAC.ue_localization) {
     if (!loc.est_pos) continue;
     const [ex, ey, ez] = loc.est_pos;
     const [tx, ty, tz] = loc.true_pos;
 
+    // Cyan octahedron raised above estimated position
     const estMesh = new THREE.Mesh(estGeo, matEst);
-    estMesh.position.copy(f2t(ex, ey, ez));
+    estMesh.position.copy(f2t(ex, ey, ez + LIFT));
     gISAC.add(estMesh);
 
-    const lineGeo = new THREE.BufferGeometry().setFromPoints([f2t(tx,ty,tz), f2t(ex,ey,ez)]);
+    // Drop line from raised marker down to true position
+    const lineGeo = new THREE.BufferGeometry().setFromPoints([
+      f2t(tx, ty, tz), f2t(ex, ey, ez + LIFT)
+    ]);
     gISAC.add(new THREE.Line(lineGeo, matLine));
 
-    if (loc.error_m != null) {
-      const spr = textSprite(`${loc.error_m.toFixed(2)}m`);
-      spr.position.copy(f2t((tx+ex)/2, (ty+ey)/2, (tz+ez)/2 + 1.2));
-      gISAC.add(spr);
-    }
+    // Label above marker
+    const errText = loc.error_m != null ? `${loc.error_m.toFixed(2)}m` : '?';
+    const spr = textSprite(`UE-${loc.ue_idx} ${errText}`);
+    spr.position.copy(f2t(ex, ey, ez + LIFT + 1.4));
+    gISAC.add(spr);
   }
 }
 
@@ -321,14 +326,15 @@ if (ISAC && ISAC.ue_localization) {
 // ── Toggles ────────────────────────────────────────────────────────────────────
 const state = { factory: true, roof: false, isac: false };
 
-window.toggle = function(which) {
+function toggle(which) {
   state[which] = !state[which];
   const id = 'btn' + which[0].toUpperCase() + which.slice(1);
   document.getElementById(id).className = 'btn ' + (state[which] ? 'on' : 'off');
   if (which === 'factory') gFactory.visible = state.factory;
   if (which === 'roof')    gRoof.visible    = state.roof;
   if (which === 'isac')    gISAC.visible    = state.isac;
-};
+}
+window.toggle = toggle;  // expose for onclick= attributes in HTML
 
 document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
