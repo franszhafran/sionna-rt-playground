@@ -396,8 +396,8 @@ def serve(port=PORT):
         def log_message(self, *_):
             pass
 
+    socketserver.TCPServer.allow_reuse_address = True
     with socketserver.TCPServer(("", port), Handler) as httpd:
-        httpd.allow_reuse_address = True
         print(f"Viewer → http://localhost:{port}   (Ctrl-C to stop)")
         httpd.serve_forever()
 
