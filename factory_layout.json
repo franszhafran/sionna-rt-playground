@@ -1,0 +1,18 @@
+{
+  "building": {
+    "x0": 0.0, "x1": 60.0, "y0": 0.0, "y1": 40.0, "height": 7.0,
+    "material": "concrete",
+    "doors": {
+      "south": [{"c": 25.0, "w": 14.0, "h": 4.5}],
+      "east":  [{"c": 20.0, "w":  4.0, "h": 4.0}],
+      "north": [{"c":  5.0, "w":  6.0, "h": 4.0}]
+    }
+  },
+  "objects": [
+    {"id": "shelf_nw",  "x0":  2.0, "x1":  8.0, "y0": 32.0, "y1": 39.0, "height": 3.0, "material": "metal"},
+    {"id": "shelf_sw",  "x0":  2.0, "x1":  8.0, "y0":  2.0, "y1": 12.0, "height": 3.0, "material": "metal"},
+    {"id": "shelf_e",   "x0": 42.0, "x1": 48.0, "y0": 16.0, "y1": 26.0, "height": 3.0, "material": "metal"},
+    {"id": "machine_1", "x0": 30.0, "x1": 40.0, "y0": 16.0, "y1": 24.0, "height": 2.5, "material": "metal"},
+    {"id": "machine_2", "x0": 34.0, "x1": 42.0, "y0": 28.0, "y1": 36.0, "height": 2.5, "material": "metal"}
+  ]
+}
