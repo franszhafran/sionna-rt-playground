@@ -214,6 +214,71 @@ def cfar_ca_1d(rp_lin, guard=2, ref=8, pfa=1e-3):
     return det
 
 
+def reconstruct_environment(H_full, gnb_pos, layout, sc_freqs, pairs, range_res):
+    """
+    Bistatic delay-and-sum backprojection over 3D grid.
+    For each grid voxel, sum range-profile intensity across all pairs at the
+    corresponding bistatic delay → bright where reflectors (walls/objects) exist.
+    Returns list of {x,y,z,i} dicts (top 15% by intensity, max 4000 points).
+    """
+    b = layout["building"]
+    x_max, y_max, h_max = b["x1"], b["y1"], b["height"]
+    num_sc = len(sc_freqs)
+    scs    = float(sc_freqs[1] - sc_freqs[0])
+
+    xs = np.arange(0.0, x_max + 1.01, 1.0)
+    ys = np.arange(0.0, y_max + 1.01, 1.0)
+    zs = np.arange(0.0, h_max + 0.51, 1.0)
+    XX, YY, ZZ = np.meshgrid(xs, ys, zs, indexing='ij')
+    pts = np.stack([XX.ravel(), YY.ravel(), ZZ.ravel()], axis=1).astype(np.float64)
+    N = len(pts)
+
+    intensity = np.zeros(N, dtype=np.float64)
+
+    for tx_i, rx_i in pairs:
+        h      = pair_channel(H_full, tx_i, rx_i)
+        rp     = np.abs(np.fft.ifft(h, n=num_sc)) ** 2  # power range profile
+
+        tx     = np.array(gnb_pos[tx_i], dtype=np.float64)
+        rx     = np.array(gnb_pos[rx_i], dtype=np.float64)
+        d_dir  = np.linalg.norm(rx - tx)
+
+        d_tx   = np.linalg.norm(pts - tx, axis=1)
+        d_rx   = np.linalg.norm(pts - rx, axis=1)
+        bins   = (d_tx + d_rx - d_dir) / range_res   # fractional bin
+
+        # Skip bins 0..3 (direct path + near-sidelobe leakage)
+        valid  = (bins >= 4.0) & (bins < num_sc - 1)
+        bi     = np.clip(np.floor(bins).astype(int), 0, num_sc - 2)
+        bf     = bins - bi
+
+        rp_interp = np.where(valid,
+                             rp[bi] * (1.0 - bf) + rp[bi + 1] * bf,
+                             0.0)
+        intensity += rp_interp
+
+    intensity /= len(pairs)
+
+    # Keep top 15%, then cap at 4000 points ordered by intensity
+    thresh = np.percentile(intensity, 85)
+    mask   = intensity >= thresh
+    pts_k  = pts[mask]
+    int_k  = intensity[mask]
+
+    order  = np.argsort(int_k)[::-1][:4000]
+    pts_k  = pts_k[order]
+    int_k  = int_k[order]
+
+    i_min, i_max = int_k.min(), int_k.max()
+    int_n  = (int_k - i_min) / (i_max - i_min + 1e-30)
+
+    return [
+        {"x": round(float(p[0]), 1), "y": round(float(p[1]), 1),
+         "z": round(float(p[2]), 1), "i": round(float(v), 3)}
+        for p, v in zip(pts_k, int_n)
+    ]
+
+
 def grid_localize(gnb_pos, constraints, x_max, y_max, res=0.5):
     """Grid-search localization on bistatic range-sum ellipses."""
     xs = np.arange(0.0, x_max + res, res)
@@ -341,19 +406,26 @@ def run_isac(scene_xml, layout, uegnb):
         print(f"  Mean err  : {np.mean(errors):.2f} m")
         print(f"  Max err   : {np.max(errors):.2f} m")
 
+    print("\n=== Environment Reconstruction ===")
+    print("  Backprojecting clutter returns onto 3D grid...", flush=True)
+    t_recon = time.time()
+    env_pts = reconstruct_environment(H_full, gnb_pos, layout, sc_freqs, pairs, range_res)
+    print(f"  {len(env_pts)} voxels above threshold in {time.time()-t_recon:.1f}s")
+
     out = {
-        "frequency_ghz":  fc / 1e9,
-        "bandwidth_mhz":  round(num_sc * scs / 1e6, 1),
-        "range_res_m":    round(range_res, 4),
-        "agv_rcs_m2":     AGV_RCS_M2,
-        "n_gnbs":         n_gnbs,
-        "n_ues":          len(ue_pos),
-        "gnb_positions":  gnb_pos,
-        "ue_localization": loc_results,
-        "pair_results":   pair_results,
-        "n_localized":    n_loc,
-        "mean_error_m":   round(float(np.mean(errors)), 3) if errors else None,
-        "max_error_m":    round(float(np.max(errors)),  3) if errors else None,
+        "frequency_ghz":    fc / 1e9,
+        "bandwidth_mhz":    round(num_sc * scs / 1e6, 1),
+        "range_res_m":      round(range_res, 4),
+        "agv_rcs_m2":       AGV_RCS_M2,
+        "n_gnbs":           n_gnbs,
+        "n_ues":            len(ue_pos),
+        "gnb_positions":    gnb_pos,
+        "ue_localization":  loc_results,
+        "pair_results":     pair_results,
+        "n_localized":      n_loc,
+        "mean_error_m":     round(float(np.mean(errors)), 3) if errors else None,
+        "max_error_m":      round(float(np.max(errors)),  3) if errors else None,
+        "env_reconstruction": env_pts,
     }
     with open("isac_results.json", "w") as fh:
         json.dump(out, fh, indent=2)

@@ -290,7 +290,41 @@ window.toggle = toggle;  // expose for onclick= attributes in HTML
   el.innerHTML = s;
 }
 
-// ── ISAC overlay ──────────────────────────────────────────────────────────────
+// ── ISAC: environment reconstruction point cloud ──────────────────────────────
+if (ISAC && ISAC.env_reconstruction && ISAC.env_reconstruction.length > 0) {
+  const pts = ISAC.env_reconstruction;
+  const positions = new Float32Array(pts.length * 3);
+  const colors    = new Float32Array(pts.length * 3);
+
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    const v = f2t(p.x, p.y, p.z);
+    positions[i*3]   = v.x;
+    positions[i*3+1] = v.y;
+    positions[i*3+2] = v.z;
+    // Colormap: 0=dark-blue → 0.5=cyan → 1=white (matches radar "hot" palette)
+    const t = p.i;
+    colors[i*3]   = t < 0.5 ? 0              : (t - 0.5) * 2;   // R
+    colors[i*3+1] = t < 0.5 ? t * 2          : 1.0;              // G
+    colors[i*3+2] = t < 0.5 ? 1.0            : 1.0 - (t-0.5)*2; // B
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('color',    new THREE.BufferAttribute(colors, 3));
+
+  const mat = new THREE.PointsMaterial({
+    size: 1.0,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.75,
+    sizeAttenuation: true,
+    depthWrite: false,
+  });
+  gISAC.add(new THREE.Points(geo, mat));
+}
+
+// ── ISAC: UE localization markers ─────────────────────────────────────────────
 function textSprite(text) {
   const cvs = document.createElement('canvas');
   cvs.width = 160; cvs.height = 52;
