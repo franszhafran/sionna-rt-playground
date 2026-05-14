@@ -62,7 +62,7 @@ canvas { display: block; }
 <div id="toggles">
   <button class="btn on"  id="btnFactory" onclick="toggle('factory')">&#x25FC; Factory [F]</button>
   <button class="btn off" id="btnRoof"    onclick="toggle('roof')">&#x25B2; Roof [R]</button>
-  <button class="btn off" id="btnISAC"    onclick="toggle('isac')">&#x25CB; ISAC [I]</button>
+  <button class="btn off" id="btnIsac"    onclick="toggle('isac')">&#x25CB; ISAC [I]</button>
 </div>
 
 <script type="importmap">
